@@ -68,7 +68,23 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 		return "", fmt.Errorf("getting status: %w", err)
 	}
 	if status.IsClean() {
-		return "nothing to commit, working tree clean - no push needed", nil
+		// No file changes to commit, but the branch may still be ahead of origin
+		// (e.g. a previous push failed, leaving a committed-but-unpushed change).
+		// Flush any pending commits rather than short-circuiting: a stranded
+		// commit plus a last-write-wins Pull on another device would lose work.
+		if _, err := repo.Remote("origin"); err != nil {
+			// No remote configured - there is genuinely nothing to push.
+			return "nothing to commit, working tree clean", nil
+		}
+		auth := &http.BasicAuth{Username: username, Password: token}
+		err := repo.PushContext(ctx, &gogit.PushOptions{Auth: auth})
+		if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+			return "nothing to commit, already up to date", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("pushing pending commits: %w", err)
+		}
+		return "no file changes; pushed pending local commit(s)", nil
 	}
 
 	// Server-side secret gate: scan the content of every changed file before
