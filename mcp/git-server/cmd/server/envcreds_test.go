@@ -34,6 +34,20 @@ func TestEnvCredentialsHostMatchIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestEnvCredentialsHostMatchIgnoresTrailingDot(t *testing.T) {
+	// A repo remote may resolve to an FQDN root form ("gitlab.com."); the env
+	// token scoped to "gitlab.com" should still apply.
+	setEnvCreds(t, "gitlab.com", "lsymons", "glpat-test")
+	if _, _, ok := envCredentials("gitlab.com."); !ok {
+		t.Fatal("expected trailing-dot host to match the env-scoped host")
+	}
+	// And the reverse: env host with the trailing dot, bare lookup host.
+	setEnvCreds(t, "gitlab.com.", "lsymons", "glpat-test")
+	if _, _, ok := envCredentials("gitlab.com"); !ok {
+		t.Fatal("expected env host with trailing dot to match a bare lookup host")
+	}
+}
+
 func TestEnvCredentialsUsernameDefaults(t *testing.T) {
 	t.Setenv("CORTEX_GIT_HOST", "gitlab.com")
 	t.Setenv("CORTEX_GIT_TOKEN", "glpat-test")

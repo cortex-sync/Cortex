@@ -36,15 +36,22 @@ command -v python3 >/dev/null 2>&1 || { echo "pack-mcpb: 'python3' is required" 
 goos="${1:-$(go env GOOS)}"
 goarch="${2:-$(go env GOARCH)}"
 
-# The manifest is the single source of truth for name + version. Reading it
-# also validates it parses as JSON (fail-closed before we build anything).
-read -r name version < <(python3 -c '
+# The manifest is the single source of truth for name + version. Python validates
+# both are non-empty strings (rejecting null/missing/non-string), and prints them
+# one per line; command substitution (not process substitution) makes a python
+# failure propagate as a non-zero exit the `||` catches, failing closed before we
+# build. Reading line-by-line preserves any internal whitespace verbatim.
+manifest_meta="$(python3 -c '
 import json, sys
-with open(sys.argv[1]) as f:
-    m = json.load(f)
-print(m["name"], m["version"])
-' "$manifest") || { echo "pack-mcpb: $manifest is not valid JSON or is missing name/version" >&2; exit 1; }
-[ -n "$version" ] || { echo "pack-mcpb: manifest .version missing" >&2; exit 1; }
+m = json.load(open(sys.argv[1]))
+for key in ("name", "version"):
+    v = m.get(key)
+    if not isinstance(v, str) or not v.strip():
+        sys.exit("manifest %s must be a non-empty string" % key)
+print(m["name"])
+print(m["version"])
+' "$manifest")" || { echo "pack-mcpb: $manifest is invalid (bad JSON or missing/empty name/version)" >&2; exit 1; }
+{ read -r name; read -r version; } <<<"$manifest_meta"
 
 bin_name="cortex-git-server"
 [ "$goos" = "windows" ] && bin_name="cortex-git-server.exe"

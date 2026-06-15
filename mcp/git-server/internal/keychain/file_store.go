@@ -129,7 +129,11 @@ func (f *fileStore) load() (map[string]credEntry, error) {
 
 	plaintext, err := decrypt(blob)
 	if err != nil {
-		return nil, fmt.Errorf("decrypting credentials file: %w", err)
+		// The file backend's key is machine-bound, so a decrypt failure usually
+		// means the file was written on another machine (or is corrupt). Because
+		// Set and Delete also load() first, this otherwise blocks storing new
+		// credentials too - surface the recovery path in the error.
+		return nil, fmt.Errorf("decrypting credentials file %s (it may be from another machine or corrupt; delete it and re-run set_credentials to recover): %w", f.path, err)
 	}
 
 	creds := map[string]credEntry{}
