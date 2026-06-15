@@ -46,6 +46,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov tokenless (OIDC) upload for this public repo
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -56,6 +59,19 @@ jobs:
         run: |
           go test ./... -count=1 -coverprofile=coverage.out
           go tool cover -func=coverage.out | tail -1
+      - name: enforce coverage floor
+        run: |
+          floor=70.0
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+          echo "total coverage: ${total}% (floor ${floor}%)"
+          awk -v t="$total" -v f="$floor" 'BEGIN { exit (t+0 >= f+0) ? 0 : 1 }' || {
+            echo "::error::coverage ${total}% is below the ${floor}% floor"; exit 1; }
+      - name: upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: mcp/git-server/coverage.out
+          # Tokenless OIDC upload (public repo); never fail CI on an upload hiccup.
+          fail_ci_if_error: false
 
   build:
     runs-on: ubuntu-latest
