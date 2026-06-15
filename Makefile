@@ -1,4 +1,4 @@
-.PHONY: fmt lint validate build build-all clean hooks-install release-dry-run licenses e2e mcpb mcpb-all mcpb-check
+.PHONY: fmt lint validate build build-all clean hooks-install release-dry-run licenses e2e mcpb mcpb-all mcpb-check test-launcher
 
 fmt:
 	cd mcp/git-server && make fmt
@@ -44,6 +44,11 @@ mcpb-all:
 # bit, icon, tools). Runs in CI; run locally after `make mcpb`/`mcpb-all`.
 mcpb-check:
 	python3 scripts/check-mcpb.py dist
+
+# Test the launcher's SHA-256 integrity gate (fail-closed) against a local
+# fixture release - no network. See scripts/test-launcher.sh.
+test-launcher:
+	bash scripts/test-launcher.sh
 
 hooks-install:
 	@which lefthook > /dev/null || (echo "Installing lefthook..." && go install github.com/evilmartians/lefthook@latest)

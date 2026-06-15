@@ -103,6 +103,17 @@ jobs:
       - name: verify bundle structure
         run: python3 scripts/check-mcpb.py dist
 
+  launcher:
+    runs-on: ubuntu-latest
+    # The launcher integrity test runs from the repo root; no Go toolchain needed.
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: launcher SHA-256 integrity test
+        run: make test-launcher
+
   sast:
     runs-on: ubuntu-latest
     # security-events: write lets us publish gosec findings to the Security tab.
