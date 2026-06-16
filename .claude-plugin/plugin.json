@@ -2,7 +2,7 @@
   "name": "cortex",
   "displayName": "Cortex",
   "description": "Sync your AI profile, persona, and memory across devices and AI platforms via Git. Build knowledge once, use it everywhere.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "keywords": ["profile", "memory", "sync", "claude-code", "mcp", "git"],
   "author": {
     "name": "Lucas Symons"

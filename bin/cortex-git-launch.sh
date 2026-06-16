@@ -62,7 +62,11 @@ bin_dir="$data_dir/bin"
 bin="$bin_dir/cortex-git-server-$version-$goos-$goarch"
 
 if [ ! -x "$bin" ]; then
-	base="https://github.com/$repo/releases/download/$tag"
+	# Release download base. Overridable via CORTEX_GIT_RELEASE_BASE for a mirror
+	# or for offline testing (the test suite points it at a local fixture over
+	# file://); defaults to the GitHub release. The SHA-256 check below is the
+	# integrity guarantee regardless of where the bytes come from.
+	base="${CORTEX_GIT_RELEASE_BASE:-https://github.com/$repo/releases/download/$tag}"
 	archive="cortex-git-server_${version}_${goos}_${goarch}.tar.gz"
 	tmp="$(mktemp -d)"
 	trap 'rm -rf "$tmp"' EXIT

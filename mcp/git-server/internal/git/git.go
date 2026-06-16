@@ -68,13 +68,32 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 		return "", fmt.Errorf("getting status: %w", err)
 	}
 	if status.IsClean() {
-		return "nothing to commit, working tree clean - no push needed", nil
+		// No file changes to commit, but the branch may still be ahead of origin
+		// (e.g. a previous push failed, leaving a committed-but-unpushed change).
+		// Flush any pending commits rather than short-circuiting: a stranded
+		// commit plus a last-write-wins Pull on another device would lose work.
+		if _, err := repo.Remote("origin"); err != nil {
+			// No remote configured - there is genuinely nothing to push.
+			return "nothing to commit, working tree clean", nil
+		}
+		auth := &http.BasicAuth{Username: username, Password: token}
+		err := repo.PushContext(ctx, &gogit.PushOptions{Auth: auth})
+		if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+			return "nothing to commit, already up to date", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("pushing pending commits: %w", err)
+		}
+		return "no file changes; pushed pending local commit(s)", nil
 	}
 
 	// Server-side secret gate: scan the content of every changed file before
-	// committing. This is the authoritative backstop behind the skill-level
+	// committing. This is the last line of defence behind the skill-level
 	// filename gate - it catches a credential pasted into a file's body, which a
-	// filename check cannot, and it holds even if the skill gate is bypassed.
+	// filename check cannot, and runs even if the skill gate is bypassed. It is a
+	// best-effort guard tuned for accidental pastes, not an adversarial control:
+	// binary and very large files are skipped (see secretscan), so it does not
+	// guarantee a determined attempt to smuggle a secret through is caught.
 	paths := make([]string, 0, len(status))
 	for path := range status {
 		paths = append(paths, path)
@@ -106,31 +125,66 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 	return fmt.Sprintf("committed and pushed: %s", commit.String()), nil
 }
 
-// Pull fetches from origin and force-updates the current branch, discarding any
-// diverging local commits (last-write-wins; see Force below). The fetch honours
-// ctx, so a hung network operation can be cancelled or timed out by the caller.
+// Pull force-updates the current branch to origin's tip: last-write-wins. The
+// remote always wins - any diverging local commits AND any uncommitted local
+// changes are discarded. This is deliberate for a profile sync (the source of
+// truth is the remote), but it is destructive, so callers must treat it as such.
+//
+// It cannot use go-git's PullContext: in go-git v5, PullOptions.Force only
+// affects the fetch, while PullContext still rejects a non-fast-forward update
+// (ErrNonFastForwardUpdate) and aborts on a dirty worktree - which is exactly
+// the diverged two-device case this is meant to resolve. So we fetch the branch
+// into a remote-tracking ref and hard-reset onto it. The fetch honours ctx, so a
+// hung network operation can be cancelled or timed out by the caller.
 func Pull(ctx context.Context, repoPath, username, token string) (string, error) {
 	repo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("opening repo: %w", err)
 	}
+
+	head, err := repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("resolving HEAD: %w", err)
+	}
+	if !head.Name().IsBranch() {
+		return "", fmt.Errorf("HEAD is not on a branch (%s); cannot pull", head.Name())
+	}
+	branch := head.Name().Short()
+
 	wt, err := repo.Worktree()
 	if err != nil {
 		return "", fmt.Errorf("getting worktree: %w", err)
 	}
 
+	// Fetch origin's branch into a remote-tracking ref. The explicit refspec
+	// keeps this working even for a repo created by InitAndPush (whose origin may
+	// carry no fetch refspec); Force lets the tracking ref move non-fast-forward.
 	auth := &http.BasicAuth{Username: username, Password: token}
-	err = wt.PullContext(ctx, &gogit.PullOptions{
-		Auth:  auth,
-		Force: true, // last-write-wins: force fast-forward on diverged histories
+	trackingRef := plumbing.NewRemoteReferenceName("origin", branch)
+	refSpec := config.RefSpec(fmt.Sprintf("+refs/heads/%s:%s", branch, trackingRef))
+	err = repo.FetchContext(ctx, &gogit.FetchOptions{
+		Auth:     auth,
+		RefSpecs: []config.RefSpec{refSpec},
+		Force:    true,
 	})
-	if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		return "", fmt.Errorf("fetching: %w", err)
+	}
+
+	remoteRef, err := repo.Reference(trackingRef, true)
+	if err != nil {
+		return "", fmt.Errorf("resolving origin/%s after fetch: %w", branch, err)
+	}
+	if remoteRef.Hash() == head.Hash() {
 		return "already up to date", nil
 	}
-	if err != nil {
-		return "", fmt.Errorf("pulling: %w", err)
+
+	// Hard reset moves the current branch to origin's tip and overwrites the
+	// index and worktree (see setHEADCommit + HardReset in go-git): remote wins.
+	if err := wt.Reset(&gogit.ResetOptions{Mode: gogit.HardReset, Commit: remoteRef.Hash()}); err != nil {
+		return "", fmt.Errorf("resetting to origin/%s: %w", branch, err)
 	}
-	return "pulled latest changes", nil
+	return fmt.Sprintf("pulled latest changes (reset to origin/%s)", branch), nil
 }
 
 // Clone clones a remote repo to the given local path. The clone honours ctx, so
@@ -258,6 +312,12 @@ func RequireHTTPS(remoteURL string) (string, error) {
 	}
 	if u.Host == "" {
 		return "", fmt.Errorf("remote URL %q has no host", remoteURL)
+	}
+	// Reject a credential embedded in the URL (https://user:token@host/...).
+	// Cortex passes the PAT via BasicAuth, never in the URL - and a userinfo URL
+	// would be persisted verbatim into .git/config by clone/init, leaking it.
+	if u.User != nil {
+		return "", fmt.Errorf("remote URL must not embed credentials (userinfo) - Cortex supplies the PAT separately, not in the URL")
 	}
 	return u.Hostname(), nil
 }

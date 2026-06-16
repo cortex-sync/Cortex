@@ -1,5 +1,11 @@
 # Cortex
 
+[![CI](https://github.com/LucasSymons/Cortex/actions/workflows/ci.yml/badge.svg)](https://github.com/LucasSymons/Cortex/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/LucasSymons/Cortex/graph/badge.svg)](https://codecov.io/gh/LucasSymons/Cortex)
+[![Release](https://img.shields.io/github/v/release/LucasSymons/Cortex?sort=semver)](https://github.com/LucasSymons/Cortex/releases)
+[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](mcp/git-server/go.mod)
+[![License: MIT](https://img.shields.io/github/license/LucasSymons/Cortex)](LICENSE)
+
 > Your AI profile, synced everywhere.
 
 Cortex is a Claude Code / Cowork plugin that keeps your AI persona, memory, and accumulated knowledge in sync across devices and AI platforms via Git.
@@ -34,9 +40,11 @@ Developers running from a local checkout can build the server with `make build`;
 the launcher prefers a local build when present. See
 [Running from a local checkout](CONTRIBUTING.md#running-from-a-local-checkout).
 
-> **Surface:** these steps are for **Claude Code CLI**. Cowork (the desktop/web app)
-> uses a different runtime - no local MCP binary, and `CLAUDE.md` loads from the
-> connected Documents folder. Cowork support is on the [roadmap](docs/TODO.md#cowork-support).
+> **Surfaces:** the steps above are for **Claude Code CLI**. For the **Claude
+> Desktop app and Cowork**, Cortex ships a `.mcpb` desktop-extension bundle that
+> runs `cortex-git` as a local MCP server, with your PAT supplied through Claude's
+> config UI - see [Cowork / Claude Desktop](docs/usage.md#cowork--claude-desktop-mcpb-bundle).
+> Browser and mobile have no local runtime and are out of scope.
 
 ## Quick start
 

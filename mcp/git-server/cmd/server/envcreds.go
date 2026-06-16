@@ -46,7 +46,7 @@ func envCredentials(host string) (username, token string, ok bool) {
 		})
 		return "", "", false
 	}
-	if !strings.EqualFold(envHost, strings.TrimSpace(host)) {
+	if !hostsEqual(envHost, host) {
 		return "", "", false
 	}
 	username = os.Getenv("CORTEX_GIT_USERNAME")
@@ -54,4 +54,15 @@ func envCredentials(host string) (username, token string, ok bool) {
 		username = envUsernameDefault
 	}
 	return username, token, true
+}
+
+// hostsEqual compares two hostnames for credential scoping: case-insensitive,
+// ignoring surrounding whitespace and a trailing FQDN root dot (so
+// "gitlab.com." matches "gitlab.com"). Matching is exact otherwise - the env
+// token is only ever offered to its named host.
+func hostsEqual(a, b string) bool {
+	canon := func(h string) string {
+		return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+	}
+	return canon(a) == canon(b)
 }

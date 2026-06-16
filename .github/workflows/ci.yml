@@ -46,6 +46,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov tokenless (OIDC) upload for this public repo
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -56,6 +59,19 @@ jobs:
         run: |
           go test ./... -count=1 -coverprofile=coverage.out
           go tool cover -func=coverage.out | tail -1
+      - name: enforce coverage floor
+        run: |
+          floor=70.0
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
+          echo "total coverage: ${total}% (floor ${floor}%)"
+          awk -v t="$total" -v f="$floor" 'BEGIN { exit (t+0 >= f+0) ? 0 : 1 }' || {
+            echo "::error::coverage ${total}% is below the ${floor}% floor"; exit 1; }
+      - name: upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: mcp/git-server/coverage.out
+          # Tokenless OIDC upload (public repo); never fail CI on an upload hiccup.
+          fail_ci_if_error: false
 
   build:
     runs-on: ubuntu-latest
@@ -68,8 +84,44 @@ jobs:
       - name: cross-compile all platforms
         run: make build-all
 
+  mcpb:
+    runs-on: ubuntu-latest
+    # The packer and checker run from the repo root.
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: mcp/git-server/go.sum
+      - name: pack bundles (host + windows)
+        run: |
+          make mcpb
+          bash scripts/pack-mcpb.sh windows amd64
+      - name: verify bundle structure
+        run: python3 scripts/check-mcpb.py dist
+
+  launcher:
+    runs-on: ubuntu-latest
+    # The launcher integrity test runs from the repo root; no Go toolchain needed.
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: launcher SHA-256 integrity test
+        run: make test-launcher
+
   sast:
     runs-on: ubuntu-latest
+    # security-events: write lets us publish gosec findings to the Security tab.
+    # contents: read is still needed for checkout (job-level perms replace the
+    # top-level default).
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -77,9 +129,19 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: mcp/git-server/go.sum
       - name: gosec
+        # gosec writes the SARIF report, then exits non-zero if it found
+        # anything - so the job stays a hard gate while the report is produced.
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
-          "$(go env GOPATH)/bin/gosec" ./...
+          "$(go env GOPATH)/bin/gosec" -fmt sarif -out results.sarif ./...
+      - name: upload gosec SARIF to the Security tab
+        # always(): publish the findings even when the gate above failed, so the
+        # alerts show up in the Security tab rather than only in the run log.
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: mcp/git-server/results.sarif
+          category: gosec
 
   govulncheck:
     runs-on: ubuntu-latest
@@ -97,13 +159,24 @@ jobs:
   gitleaks:
     runs-on: ubuntu-latest
     # Scan the whole repository from the root (the .gitleaks.toml lives there).
+    # Use the gitleaks CLI directly (MIT, free) instead of gitleaks-action,
+    # which requires a paid licence key for GitHub organisations.
     defaults:
       run:
         working-directory: ${{ github.workspace }}
+    env:
+      GITLEAKS_VERSION: "8.30.1"
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install gitleaks
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Run gitleaks
+        # Scans full git history; .gitleaks.toml allowlists the scanner's own
+        # test fixtures. Exits non-zero on findings (default), failing the job.
+        run: gitleaks git --config .gitleaks.toml --redact --verbose

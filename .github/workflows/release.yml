@@ -41,3 +41,20 @@ jobs:
           # Build release binaries with the patched stdlib regardless of the Go
           # the runner ships, matching the version CI validates against.
           GOTOOLCHAIN: go1.26.4
+
+      # Pack the Claude Desktop / Cowork .mcpb bundles (one per target) and
+      # attach them to the release goreleaser just created. The manifest version
+      # must match the tag, or the bundles would ship mis-named/mis-versioned.
+      - name: Build and attach .mcpb desktop-extension bundles
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          mver="$(python3 -c "import json; print(json.load(open('mcpb/manifest.json'))['version'])")"
+          if [ "$tag" != "$mver" ]; then
+            echo "::error::mcpb/manifest.json version ($mver) does not match tag ($GITHUB_REF_NAME); bump the manifest before tagging" >&2
+            exit 1
+          fi
+          make mcpb-all
+          gh release upload "$GITHUB_REF_NAME" dist/*.mcpb --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOTOOLCHAIN: go1.26.4

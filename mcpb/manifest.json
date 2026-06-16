@@ -1,0 +1,98 @@
+{
+  "manifest_version": "0.3",
+  "name": "cortex-git",
+  "display_name": "Cortex",
+  "version": "0.2.0",
+  "description": "Sync your AI profile, persona, and memory across devices and AI platforms via Git.",
+  "long_description": "Cortex keeps a single AI profile - persona, CLAUDE.md, and memory - in a private Git repo so every Claude install is identical. This bundle installs the cortex-git MCP server (a self-contained binary) for the Claude Desktop app and Cowork. Provide a Personal Access Token for your Git host and Cortex can clone, commit, push, and pull your profile repo directly. Pair it with the Cortex skills and a connected profile-repo folder for the full experience.",
+  "author": {
+    "name": "Lucas Symons",
+    "url": "https://github.com/LucasSymons"
+  },
+  "homepage": "https://github.com/LucasSymons/Cortex",
+  "documentation": "https://github.com/LucasSymons/Cortex#readme",
+  "support": "https://github.com/LucasSymons/Cortex/issues",
+  "license": "MIT",
+  "icon": "icon.png",
+  "keywords": ["profile", "memory", "sync", "git", "mcp", "cortex"],
+  "server": {
+    "type": "binary",
+    "entry_point": "cortex-git-server",
+    "mcp_config": {
+      "command": "${__dirname}/cortex-git-server",
+      "args": [],
+      "env": {
+        "CORTEX_GIT_HOST": "${user_config.host}",
+        "CORTEX_GIT_USERNAME": "${user_config.username}",
+        "CORTEX_GIT_TOKEN": "${user_config.token}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/cortex-git-server.exe"
+        }
+      }
+    }
+  },
+  "user_config": {
+    "token": {
+      "type": "string",
+      "title": "Personal Access Token",
+      "description": "A Git host PAT with read/write access to your profile repo (e.g. a GitHub fine-grained token or a GitLab write_repository token). Stored by Claude and passed to the server as CORTEX_GIT_TOKEN; never written to the transcript.",
+      "sensitive": true,
+      "required": true
+    },
+    "host": {
+      "type": "string",
+      "title": "Git host",
+      "description": "The Git host the token is for. The token is only ever offered to this host.",
+      "default": "github.com",
+      "required": true
+    },
+    "username": {
+      "type": "string",
+      "title": "Git username",
+      "description": "Username for HTTPS basic auth. Both GitHub and GitLab accept any non-empty username alongside a PAT; the default is fine unless your host requires a specific one.",
+      "default": "git",
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "git_status",
+      "description": "List changed files in the Cortex profile repo"
+    },
+    {
+      "name": "git_commit_push",
+      "description": "Commit all changed files and push to the remote"
+    },
+    {
+      "name": "git_pull",
+      "description": "Pull latest changes from the remote, force-updating the local branch (last-write-wins)"
+    },
+    {
+      "name": "git_clone",
+      "description": "Clone the Cortex profile repo to a local path"
+    },
+    {
+      "name": "git_init",
+      "description": "Initialise a new profile repo locally, commit the files in local_path, add the remote, and push (first-run setup against an empty remote)"
+    },
+    {
+      "name": "get_auth_status",
+      "description": "Check whether a PAT is available for a host and report its source (environment or credential store)"
+    },
+    {
+      "name": "set_credentials",
+      "description": "Store a Personal Access Token for a host in the OS keychain or encrypted-file fallback"
+    },
+    {
+      "name": "delete_credentials",
+      "description": "Remove the stored PAT for a host, e.g. to rotate a token"
+    }
+  ],
+  "tools_generated": false,
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": {}
+  }
+}

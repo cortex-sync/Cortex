@@ -63,6 +63,43 @@ available in every future session. Runs on sync or on demand.
 
 ---
 
+## Cowork / Claude Desktop (`.mcpb` bundle)
+
+The `/plugin` install above is for the **Claude Code CLI**. The **Claude Desktop
+app** (including **Cowork**) installs local MCP servers a different way: as a
+`.mcpb` desktop-extension bundle. Cortex ships one so the `cortex-git` server
+runs host-side and your PAT is supplied through Claude's own config UI - the same
+model the Snyk extension uses.
+
+**Install:**
+
+1. Download `cortex-git_<version>_<os>_<arch>.mcpb` for your platform from the
+   [GitHub release](https://github.com/LucasSymons/Cortex/releases).
+2. In Claude Desktop, open the **Connectors** page and add the `.mcpb`.
+3. When prompted, fill in the user config:
+   - **Personal Access Token** (required, stored securely by Claude) - a PAT with
+     read/write on your profile repo.
+   - **Git host** (required, e.g. `github.com`) - the token is only ever offered
+     to this host.
+   - **Git username** (optional, defaults to `git`).
+4. Connect a **git clone of your profile repo as a folder** so its root
+   `CLAUDE.md` and `memory/` load. The skills (`/setup`, `/sync-profile`, etc.)
+   then drive the server to commit/push/pull as usual.
+
+The token is passed to the server via the `CORTEX_GIT_TOKEN` / `CORTEX_GIT_HOST`
+/ `CORTEX_GIT_USERNAME` environment variables (see the manifest); it scopes to
+the named host only and is never written to the transcript.
+
+> **Building a bundle yourself:** `make mcpb` packs one for your host platform,
+> or `make mcpb-all` packs every released target, into `dist/`. See
+> [`scripts/pack-mcpb.sh`](../scripts/pack-mcpb.sh).
+
+> **Managed/corporate machines:** desktop app-control (e.g. endpoint protection)
+> may block the unsigned binary from running host-side. Until the Windows binary
+> is code-signed, use the Claude Code CLI with host-side sync on those machines.
+
+---
+
 ## Troubleshooting
 
 ### `no credentials found for <host> - run set_credentials first`

@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 func TestParseHost(t *testing.T) {
@@ -60,6 +62,8 @@ func TestRequireHTTPS(t *testing.T) {
 		{"scp-style rejected", "git@gitlab.com:user/repo.git", true},
 		{"bare path rejected", "/local/path/repo", true},
 		{"empty rejected", "", true},
+		{"userinfo with token rejected", "https://user:glpat-secret@gitlab.com/u/r.git", true},
+		{"userinfo username-only rejected", "https://user@gitlab.com/u/r.git", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -235,6 +239,183 @@ func TestSyncRoundTrip(t *testing.T) {
 	}
 	if got := readFile(t, deviceA, "CLAUDE.md"); got != "v2\n" {
 		t.Fatalf("after pull CLAUDE.md = %q, want v2", got)
+	}
+}
+
+// TestPullLastWriteWinsOnDivergence is the real test of the documented
+// "last-write-wins" semantics: device A has BOTH a diverging local commit and a
+// dirty (uncommitted) worktree, while origin has advanced independently. A plain
+// go-git PullContext would return ErrNonFastForwardUpdate (or ErrUnstagedChanges
+// on the dirty tree); Pull must instead discard A's local state and converge on
+// origin's tip.
+func TestPullLastWriteWinsOnDivergence(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	bare, err := gogit.PlainInit(remote, true)
+	if err != nil {
+		t.Fatalf("init bare remote: %v", err)
+	}
+	headToMain := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main"))
+	if err := bare.Storer.SetReference(headToMain); err != nil {
+		t.Fatalf("set remote HEAD: %v", err)
+	}
+
+	// Device A: create and push v1.
+	deviceA := filepath.Join(root, "a")
+	if err := os.MkdirAll(deviceA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, deviceA, "CLAUDE.md", "v1\n")
+	if _, err := InitAndPush(context.Background(), deviceA, remote, "cortex: initial", "u", "t"); err != nil {
+		t.Fatalf("InitAndPush: %v", err)
+	}
+
+	// Device B: clone, change the file, push - origin now advances past v1.
+	deviceB := filepath.Join(root, "b")
+	if _, err := Clone(context.Background(), remote, deviceB, "u", "t"); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	writeFile(t, deviceB, "CLAUDE.md", "remote-wins\n")
+	if _, err := CommitAndPush(context.Background(), deviceB, "cortex: B update", "u", "t"); err != nil {
+		t.Fatalf("CommitAndPush B: %v", err)
+	}
+
+	// Device A: make a DIVERGING local commit (committed directly, never pushed),
+	// then leave a further uncommitted edit on top - so A is both non-fast-forward
+	// against origin and has a dirty worktree.
+	writeFile(t, deviceA, "CLAUDE.md", "local-divergent\n")
+	repoA, err := gogit.PlainOpen(deviceA)
+	if err != nil {
+		t.Fatalf("open A: %v", err)
+	}
+	wtA, err := repoA.Worktree()
+	if err != nil {
+		t.Fatalf("worktree A: %v", err)
+	}
+	if err := wtA.AddWithOptions(&gogit.AddOptions{All: true}); err != nil {
+		t.Fatalf("stage A: %v", err)
+	}
+	if _, err := wtA.Commit("local only", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "A", Email: "a@local", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("commit A: %v", err)
+	}
+	writeFile(t, deviceA, "CLAUDE.md", "dirty-uncommitted\n") // unstaged change on top
+
+	// Pull must converge on origin despite the divergence and the dirty worktree.
+	if _, err := Pull(context.Background(), deviceA, "u", "t"); err != nil {
+		t.Fatalf("Pull on diverged+dirty history: %v", err)
+	}
+	if got := readFile(t, deviceA, "CLAUDE.md"); got != "remote-wins\n" {
+		t.Fatalf("after last-write-wins pull, CLAUDE.md = %q, want origin's 'remote-wins'", got)
+	}
+}
+
+// commitLocally stages everything in dir and commits directly without pushing,
+// leaving the branch ahead of origin - used to simulate a commit whose push
+// failed, or a diverging local commit.
+func commitLocally(t *testing.T, dir, message string) {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open %s: %v", dir, err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree %s: %v", dir, err)
+	}
+	if err := wt.AddWithOptions(&gogit.AddOptions{All: true}); err != nil {
+		t.Fatalf("stage %s: %v", dir, err)
+	}
+	if _, err := wt.Commit(message, &gogit.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@local", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("commit %s: %v", dir, err)
+	}
+}
+
+// TestCommitAndPushFlushesUnpushedCommits guards the stranding bug: a commit
+// whose push failed leaves the branch ahead of origin with a clean worktree.
+// CommitAndPush must still push it rather than short-circuit on "nothing to
+// commit" - otherwise the commit is stranded, and a subsequent last-write-wins
+// Pull on another device would silently destroy it.
+func TestCommitAndPushFlushesUnpushedCommits(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	bare, err := gogit.PlainInit(remote, true)
+	if err != nil {
+		t.Fatalf("init bare remote: %v", err)
+	}
+	headToMain := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main"))
+	if err := bare.Storer.SetReference(headToMain); err != nil {
+		t.Fatalf("set remote HEAD: %v", err)
+	}
+
+	deviceA := filepath.Join(root, "a")
+	if err := os.MkdirAll(deviceA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, deviceA, "CLAUDE.md", "v1\n")
+	if _, err := InitAndPush(context.Background(), deviceA, remote, "cortex: initial", "u", "t"); err != nil {
+		t.Fatalf("InitAndPush: %v", err)
+	}
+
+	// Commit a change locally WITHOUT pushing (as if the push had failed): the
+	// worktree is now clean but the branch is one commit ahead of origin.
+	writeFile(t, deviceA, "CLAUDE.md", "v2\n")
+	commitLocally(t, deviceA, "cortex: unpushed change")
+
+	if _, err := CommitAndPush(context.Background(), deviceA, "cortex: sync", "u", "t"); err != nil {
+		t.Fatalf("CommitAndPush: %v", err)
+	}
+
+	// Origin must now hold v2 - clone it fresh and confirm the commit was flushed.
+	deviceC := filepath.Join(root, "c")
+	if _, err := Clone(context.Background(), remote, deviceC, "u", "t"); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if got := readFile(t, deviceC, "CLAUDE.md"); got != "v2\n" {
+		t.Fatalf("origin CLAUDE.md = %q, want v2 (unpushed commit should have been flushed)", got)
+	}
+}
+
+// TestPullDiscardsUnpushedLocalCommits pins the (deliberately destructive)
+// last-write-wins contract: pulling when the local branch is AHEAD of an
+// unchanged origin discards the unpushed local commits and resets to origin -
+// the remote is the source of truth. This test exists so any change to that
+// contract is a conscious one. In normal use, sync runs CommitAndPush first,
+// which flushes pending commits before a pull (see TestCommitAndPush...).
+func TestPullDiscardsUnpushedLocalCommits(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	bare, err := gogit.PlainInit(remote, true)
+	if err != nil {
+		t.Fatalf("init bare remote: %v", err)
+	}
+	headToMain := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main"))
+	if err := bare.Storer.SetReference(headToMain); err != nil {
+		t.Fatalf("set remote HEAD: %v", err)
+	}
+
+	deviceA := filepath.Join(root, "a")
+	if err := os.MkdirAll(deviceA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, deviceA, "CLAUDE.md", "origin-v1\n")
+	if _, err := InitAndPush(context.Background(), deviceA, remote, "cortex: initial", "u", "t"); err != nil {
+		t.Fatalf("InitAndPush: %v", err)
+	}
+
+	// A local commit that is never pushed; origin stays at origin-v1.
+	writeFile(t, deviceA, "CLAUDE.md", "local-ahead\n")
+	commitLocally(t, deviceA, "cortex: local only")
+
+	// Pull resets to origin, discarding the unpushed local commit.
+	if _, err := Pull(context.Background(), deviceA, "u", "t"); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if got := readFile(t, deviceA, "CLAUDE.md"); got != "origin-v1\n" {
+		t.Fatalf("after pull, CLAUDE.md = %q, want origin-v1 (unpushed local commit should be discarded)", got)
 	}
 }
 

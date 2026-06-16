@@ -52,13 +52,27 @@ Stop and ask before any destructive git operation.
 
 ## Tests
 
+The suite is now comprehensive and CI enforces a **70% coverage floor** (see
+`.github/workflows/ci.yml`), so changes should be **test-driven by default**:
+write or adjust the failing test first, watch it fail, then implement until it
+passes. This is the expected workflow now, not an afterthought — the floor will
+reject a change that drops coverage below it anyway, and behaviour changes to the
+git wrapper have already shipped this way (e.g. the last-write-wins pull and the
+unpushed-commit flush fixes).
+
 - Every exported function in `internal/` should have coverage.
 - **Tests must run offline and hermetically** — no real network, no real OS
   keychain, no shared global state left behind. Use `t.TempDir()` for repos.
 - Use `keyring.MockInit()` for keychain tests; use a local bare repo for git
   network operations (see `internal/git/git_test.go` `TestSyncRoundTrip`).
 - Prefer table-driven tests for pure functions.
-- `go test ./...` must pass before committing.
+- **Pin deliberate or destructive behaviour** with a test that documents the
+  intent (e.g. `TestPullDiscardsUnpushedLocalCommits`), so any future change to
+  that contract is a conscious one.
+- Beyond Go: `make mcpb-check` verifies a built `.mcpb`, and `make test-launcher`
+  proves the launcher's SHA-256 integrity gate fails closed. Both run in CI.
+- `make validate` (fmt, lint, vet, tests) must pass before committing; the HTTPS
+  end-to-end round-trip is `make e2e` (needs Docker).
 
 ## Running from a local checkout
 
@@ -116,5 +130,17 @@ docs/design.md               architecture and decision log
 
 ## Releases
 
-Releases are driven by goreleaser + Conventional Commits (semver). Bump the
-`version` in `.claude-plugin/plugin.json` to match the released tag.
+Releases are driven by goreleaser + Conventional Commits (semver). Before
+tagging `vX.Y.Z`, bump the version in **all three** version-bearing files so
+they agree with the tag:
+
+- `.claude-plugin/plugin.json` (`version`, no `v` prefix)
+- `bin/VERSION` (the launcher fetches the binary from this tag's release; keep
+  the `v` prefix)
+- `mcpb/manifest.json` (`version`, no `v` prefix) - the release pipeline
+  **fails closed** if this does not match the tag, so the `.mcpb` bundles can't
+  ship mis-versioned.
+
+Then commit, `git tag -a vX.Y.Z -m ...`, and push the tag. The release workflow
+runs e2e, then goreleaser (binaries + `checksums.txt`), then packs and attaches
+the `.mcpb` desktop-extension bundles (one per target via `make mcpb-all`).

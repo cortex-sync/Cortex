@@ -8,6 +8,9 @@ mcp/git-server/bin/
 # Go build artefacts
 mcp/git-server/vendor/
 
+# Release / packaging output (goreleaser and `make mcpb` both write here)
+dist/
+
 # CI GOPATH cache (GOPATH=$CI_PROJECT_DIR/.go); keep it out of the working tree
 # so goreleaser does not see the repo as dirty during a release.
 .go/
