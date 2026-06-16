@@ -110,3 +110,32 @@ func TestDecryptRejectsShortInput(t *testing.T) {
 		t.Fatal("decrypt accepted too-short input")
 	}
 }
+
+// TestMachineIDEnvOverride verifies CORTEX_MACHINE_ID takes precedence and is
+// treated as a genuine (bound) machine identifier.
+func TestMachineIDEnvOverride(t *testing.T) {
+	t.Setenv(machineIDEnvVar, "deadbeef-stable-id")
+	id, bound := machineID()
+	if id != "deadbeef-stable-id" || !bound {
+		t.Fatalf("machineID() = (%q, %v), want (deadbeef-stable-id, true)", id, bound)
+	}
+}
+
+// TestFileStoreKeyBindsToMachineID proves the encrypted store is keyed on the
+// machine identifier (the M9 finding): a file written under one identifier must
+// not decrypt under another. CORTEX_MACHINE_ID is the controllable input.
+func TestFileStoreKeyBindsToMachineID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.enc")
+
+	t.Setenv(machineIDEnvVar, "machine-one")
+	fsOne := &fileStore{path: path}
+	if err := fsOne.Set("gitlab.com", "alice", "token-aaa"); err != nil {
+		t.Fatalf("Set under machine-one: %v", err)
+	}
+
+	t.Setenv(machineIDEnvVar, "machine-two")
+	fsTwo := &fileStore{path: path}
+	if _, _, err := fsTwo.Get("gitlab.com"); err == nil {
+		t.Fatal("store decrypted under a different machine id; key is not bound to the machine")
+	}
+}
