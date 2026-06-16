@@ -15,38 +15,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-func TestParseHost(t *testing.T) {
-	cases := []struct {
-		name    string
-		url     string
-		want    string
-		wantErr bool
-	}{
-		{"gitlab https with .git", "https://gitlab.com/user/cortex-profile.git", "gitlab.com", false},
-		{"github https no suffix", "https://github.com/user/repo", "github.com", false},
-		{"host with port", "https://git.example.com:8443/u/r.git", "git.example.com", false},
-		{"empty", "", "", true},
-		{"no host", "/local/path/repo", "", true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, err := ParseHost(c.url)
-			if c.wantErr {
-				if err == nil {
-					t.Fatalf("ParseHost(%q) = %q, want error", c.url, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("ParseHost(%q) unexpected error: %v", c.url, err)
-			}
-			if got != c.want {
-				t.Fatalf("ParseHost(%q) = %q, want %q", c.url, got, c.want)
-			}
-		})
-	}
-}
-
 func TestRequireHTTPS(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -136,6 +104,39 @@ func TestRemoteHost(t *testing.T) {
 	}
 	if host != "gitlab.com" {
 		t.Fatalf("RemoteHost = %q, want gitlab.com", host)
+	}
+}
+
+// TestRemoteHostRejectsInsecureOrigin is the regression guard for the C1 finding:
+// the push and pull paths resolve credentials via RemoteHost, so RemoteHost must
+// fail closed on any origin that would leak the PAT - an http:// origin (cleartext
+// transport) or one with embedded userinfo - exactly as the clone/init paths do.
+func TestRemoteHostRejectsInsecureOrigin(t *testing.T) {
+	cases := []struct {
+		name      string
+		originURL string
+	}{
+		{"http origin sends PAT in cleartext", "http://gitlab.com/u/r.git"},
+		{"ssh origin is an unexpected transport", "ssh://git@gitlab.com/u/r.git"},
+		{"userinfo origin leaks the token", "https://user:glpat-secret@gitlab.com/u/r.git"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			repo, err := gogit.PlainInit(dir, false)
+			if err != nil {
+				t.Fatalf("init: %v", err)
+			}
+			if _, err := repo.CreateRemote(&config.RemoteConfig{
+				Name: "origin",
+				URLs: []string{c.originURL},
+			}); err != nil {
+				t.Fatalf("create remote: %v", err)
+			}
+			if host, err := RemoteHost(dir); err == nil {
+				t.Fatalf("RemoteHost(%q) = %q, want error (must fail closed)", c.originURL, host)
+			}
+		})
 	}
 }
 

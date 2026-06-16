@@ -275,7 +275,16 @@ func InitAndPush(ctx context.Context, localPath, remoteURL, message, username, t
 	return fmt.Sprintf("initialised %s, pushed %s to %s (branch %s)", localPath, commit.String(), remoteURL, defaultBranch), nil
 }
 
-// RemoteHost returns the hostname from the repo's origin remote URL.
+// RemoteHost returns the hostname from the repo's origin remote URL, enforcing
+// that origin is an https URL with no embedded credentials.
+//
+// This is the credential-resolution gate for the push and pull paths, which send
+// the PAT to whatever origin is recorded in .git/config. Validating with
+// RequireHTTPS (not a bare host parse) fails closed: a repo whose origin is
+// http://, a non-https transport, or carries userinfo is rejected before any
+// credential is read or transmitted, so the PAT can never travel over cleartext.
+// This mirrors the RequireHTTPS check the clone and init paths apply to the
+// caller-supplied URL.
 func RemoteHost(repoPath string) (string, error) {
 	repo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
@@ -289,7 +298,7 @@ func RemoteHost(repoPath string) (string, error) {
 	if len(urls) == 0 {
 		return "", fmt.Errorf("no URLs configured for origin")
 	}
-	return ParseHost(urls[0])
+	return RequireHTTPS(urls[0])
 }
 
 // RequireHTTPS validates that remoteURL uses the https scheme and has a host,
@@ -318,18 +327,6 @@ func RequireHTTPS(remoteURL string) (string, error) {
 	// would be persisted verbatim into .git/config by clone/init, leaking it.
 	if u.User != nil {
 		return "", fmt.Errorf("remote URL must not embed credentials (userinfo) - Cortex supplies the PAT separately, not in the URL")
-	}
-	return u.Hostname(), nil
-}
-
-// ParseHost extracts the hostname from an HTTPS remote URL.
-func ParseHost(remoteURL string) (string, error) {
-	u, err := url.Parse(remoteURL)
-	if err != nil {
-		return "", fmt.Errorf("parsing URL %q: %w", remoteURL, err)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("could not parse host from URL %q", remoteURL)
 	}
 	return u.Hostname(), nil
 }
