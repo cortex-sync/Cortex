@@ -12,8 +12,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	igit "github.com/LucasSymons/Cortex/mcp/git-server/internal/git"
-	"github.com/LucasSymons/Cortex/mcp/git-server/internal/keychain"
+	igit "github.com/cortex-sync/Cortex/mcp/git-server/internal/git"
+	"github.com/cortex-sync/Cortex/mcp/git-server/internal/keychain"
 )
 
 const serverName = "cortex-git"

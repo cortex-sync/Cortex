@@ -1436,7 +1436,7 @@ SOFTWARE.
 
 ```
 
-## github.com/LucasSymons/Cortex/mcp/git-server
+## github.com/cortex-sync/Cortex/mcp/git-server
 
 Version: ``
 

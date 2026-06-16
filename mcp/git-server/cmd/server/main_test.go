@@ -14,7 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/zalando/go-keyring"
 
-	"github.com/LucasSymons/Cortex/mcp/git-server/internal/keychain"
+	"github.com/cortex-sync/Cortex/mcp/git-server/internal/keychain"
 )
 
 // TestMain routes every credential operation in this package through

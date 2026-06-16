@@ -8,7 +8,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 
-	"github.com/LucasSymons/Cortex/mcp/git-server/internal/keychain"
+	"github.com/cortex-sync/Cortex/mcp/git-server/internal/keychain"
 )
 
 // repoWithRemote initialises a throwaway git repo with an "origin" remote set to

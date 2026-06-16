@@ -16,7 +16,7 @@
 # Requires: curl, tar, and sha256sum or shasum. On Windows, run under WSL.
 set -eu
 
-repo="LucasSymons/Cortex"
+repo="cortex-sync/Cortex"
 
 prefetch=0
 if [ "${1:-}" = "--prefetch" ]; then

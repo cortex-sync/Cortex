@@ -69,7 +69,7 @@ changelog:
 
 release:
   github:
-    owner: LucasSymons
+    owner: cortex-sync
     name: Cortex
   name_template: "v{{ .Version }}"
   draft: false

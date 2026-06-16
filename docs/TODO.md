@@ -2,7 +2,7 @@
 
 **Status (2026-06-15):** **v0.1.1 is the latest release** (tagged 2026-06-12;
 v0.1.0 before it), publicly installable
-(`/plugin marketplace add LucasSymons/Cortex` -> `/plugin install cortex@cortex`).
+(`/plugin marketplace add cortex-sync/Cortex` -> `/plugin install cortex@cortex`).
 GitHub Actions CI, Dependabot, and the goreleaser release pipeline are all green.
 **v0.2.0 is prepared on branch `feat/cowork-mcpb-bundle`** (env-credentials + the
 `.mcpb` desktop bundle); it is awaiting a hands-on Cowork test on an unmanaged
