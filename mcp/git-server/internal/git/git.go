@@ -90,10 +90,11 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 	// Server-side secret gate: scan the content of every changed file before
 	// committing. This is the last line of defence behind the skill-level
 	// filename gate - it catches a credential pasted into a file's body, which a
-	// filename check cannot, and runs even if the skill gate is bypassed. It is a
-	// best-effort guard tuned for accidental pastes, not an adversarial control:
-	// binary and very large files are skipped (see secretscan), so it does not
-	// guarantee a determined attempt to smuggle a secret through is caught.
+	// filename check cannot, and runs even if the skill gate is bypassed. It is
+	// tuned for accidental pastes rather than adversarial obfuscation (the
+	// ruleset targets high-signal credential shapes), but it fails closed: a file
+	// that cannot be scanned - binary or oversized - blocks the commit rather
+	// than passing unverified.
 	paths := make([]string, 0, len(status))
 	for path := range status {
 		paths = append(paths, path)

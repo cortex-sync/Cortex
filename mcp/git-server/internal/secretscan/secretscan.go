@@ -25,12 +25,25 @@ import (
 
 const (
 	// maxFileSize caps how much of any single file is read. Profile and memory
-	// files are small; anything larger is almost certainly a binary or data blob
-	// and is skipped rather than scanned.
+	// files are small; a file larger than this cannot be fully scanned, so the
+	// gate fails closed and blocks it rather than waving the unread tail through.
 	maxFileSize = 5 << 20 // 5 MiB
 	// maxLineLen bounds the scanner's per-line buffer. Base64-encoded keys can be
 	// long, so allow generous lines without risking unbounded memory.
 	maxLineLen = 1 << 20 // 1 MiB
+	// binarySniffLen is how much of a file's head is inspected for a NUL byte when
+	// deciding if it is binary, mirroring git's own heuristic. A NUL within this
+	// window marks the file binary; a stray NUL further in does not, so a
+	// text-dominated file is still scanned rather than skipped.
+	binarySniffLen = 8000
+)
+
+// Synthetic rule names for files the gate cannot content-scan. They are reported
+// like any other finding so an unscannable file fails the commit closed rather
+// than slipping through unverified.
+const (
+	ruleUnscannableBinary = "unscannable-binary"
+	ruleUnscannableLarge  = "unscannable-too-large"
 )
 
 // rule pairs a stable, human-readable name with a compiled detection pattern.
@@ -44,13 +57,24 @@ type rule struct {
 // shape distinctive enough to keep false positives low on prose and config.
 var rules = []rule{
 	{"aws-access-key-id", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)},
-	{"private-key-block", regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----`)},
+	// The 40-char AWS secret access key has no distinctive prefix, so it is keyed
+	// on the conventional assignment context to stay high-signal. The key ID rule
+	// above covers the other half of the pair.
+	{"aws-secret-access-key", regexp.MustCompile(`(?i)aws_?secret_?access_?key["']?\s*[:=]\s*["']?[A-Za-z0-9/+]{40}`)},
+	// Azure storage / Service Bus keys: a base64 value assigned to AccountKey or
+	// SharedAccessKey, as it appears in a connection string.
+	{"azure-storage-key", regexp.MustCompile(`(?i)(?:Account|SharedAccess)Key\s*=\s*["']?[A-Za-z0-9/+]{40,}={0,2}`)},
+	{"private-key-block", regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----`)},
 	{"gitlab-pat", regexp.MustCompile(`\bglpat-[0-9A-Za-z_-]{20,}`)},
 	{"github-pat", regexp.MustCompile(`\b(?:gh[pousr]_[0-9A-Za-z]{36,}|github_pat_[0-9A-Za-z_]{22,})`)},
 	{"slack-token", regexp.MustCompile(`\bxox[baprs]-[0-9A-Za-z-]{10,}`)},
 	{"google-api-key", regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`)},
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)},
-	{"generic-secret-assignment", regexp.MustCompile(`(?i)(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret)["']?\s*[:=]\s*["'][^"'\n]{8,}["']`)},
+	// Quoted OR unquoted value: the unquoted arm catches the dominant .env / shell
+	// / YAML shapes (FOO_SECRET=..., client_secret: ...). The keyword set uses
+	// compound identifiers (api_key, client_secret), which prose writes with
+	// spaces, keeping false positives on memory text low.
+	{"generic-secret-assignment", regexp.MustCompile(`(?i)(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret)["']?\s*[:=]\s*(?:["'][^"'\n]{8,}["']|[^\s"'\n]{8,})`)},
 }
 
 // Finding records one rule match within a file. It deliberately omits the
@@ -62,14 +86,19 @@ type Finding struct {
 	Line int    // 1-based line number of the match
 }
 
-// String renders a finding as "path:line (rule)".
+// String renders a finding as "path:line (rule)", or "path (rule)" for a
+// whole-file finding with no line (an unscannable file).
 func (f Finding) String() string {
+	if f.Line <= 0 {
+		return fmt.Sprintf("%s (%s)", f.Path, f.Rule)
+	}
 	return fmt.Sprintf("%s:%d (%s)", f.Path, f.Line, f.Rule)
 }
 
 // BlockedError is returned by callers when a commit is refused because changed
-// files contain likely secrets. Its message is actionable and never contains a
-// secret value, so it is safe to surface directly to the user.
+// files contain likely secrets or could not be scanned. Its message is
+// actionable and never contains a secret value, so it is safe to surface
+// directly to the user.
 type BlockedError struct {
 	Findings []Finding
 }
@@ -77,8 +106,8 @@ type BlockedError struct {
 // Error renders an actionable, secret-free summary of every finding.
 func (e *BlockedError) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "refusing to commit: %d potential secret(s) detected. "+
-		"Remove the secret or add the path to .gitignore, then retry:", len(e.Findings))
+	fmt.Fprintf(&b, "refusing to commit: %d secret-scan finding(s). "+
+		"Remove the secret, or add the path to .gitignore if it is intentional, then retry:", len(e.Findings))
 	for _, f := range e.Findings {
 		fmt.Fprintf(&b, "\n  - %s", f.String())
 	}
@@ -87,8 +116,10 @@ func (e *BlockedError) Error() string {
 
 // ScanFiles scans each of paths (relative to root) for secrets and returns all
 // findings, ordered by path then line for stable output. Missing files (e.g.
-// staged deletions), directories, oversized files, and binary content are
-// skipped. An error is returned only for unexpected I/O failures.
+// staged deletions) and directories carry no committed content and are skipped.
+// Files that cannot be content-scanned - oversized or binary - fail closed: they
+// yield a whole-file finding so the commit is blocked rather than letting unread
+// content through. An error is returned only for unexpected I/O failures.
 func ScanFiles(root string, paths []string) ([]Finding, error) {
 	// Confine all file access beneath root with os.Root: any path that tries to
 	// escape the scan root - via a "../" segment or a symlink pointing outside -
@@ -118,9 +149,11 @@ func ScanFiles(root string, paths []string) ([]Finding, error) {
 }
 
 // scanFile scans a single file, reporting at most one finding per rule (the
-// first match) to keep output concise. Files that do not exist, are directories,
-// exceed maxFileSize, or contain a NUL byte (treated as binary) yield no
-// findings and no error.
+// first match) to keep output concise. Files that do not exist (staged
+// deletions) or are directories yield no findings and no error. Files that
+// cannot be scanned - larger than maxFileSize, or binary (a NUL byte in the
+// first binarySniffLen bytes) - fail closed, returning a single whole-file
+// finding so the caller blocks the commit.
 func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 	info, err := root.Stat(relPath)
 	if err != nil {
@@ -129,8 +162,13 @@ func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 		}
 		return nil, fmt.Errorf("stat %s: %w", relPath, err)
 	}
-	if info.IsDir() || info.Size() > maxFileSize {
-		return nil, nil
+	if info.IsDir() {
+		return nil, nil // a directory carries no content of its own
+	}
+	if info.Size() > maxFileSize {
+		// Too large to read in full: a secret could hide beyond the scan window,
+		// so block rather than scan a prefix and wave the rest through.
+		return []Finding{{Path: relPath, Rule: ruleUnscannableLarge}}, nil
 	}
 
 	f, err := root.Open(relPath)
@@ -143,8 +181,13 @@ func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", relPath, err)
 	}
-	if bytes.IndexByte(data, 0) != -1 {
-		return nil, nil // binary file
+	sniff := data
+	if len(sniff) > binarySniffLen {
+		sniff = sniff[:binarySniffLen]
+	}
+	if bytes.IndexByte(sniff, 0) != -1 {
+		// Binary content cannot be meaningfully scanned for text secrets: block.
+		return []Finding{{Path: relPath, Rule: ruleUnscannableBinary}}, nil
 	}
 
 	var findings []Finding
