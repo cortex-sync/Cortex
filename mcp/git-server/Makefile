@@ -1,6 +1,6 @@
 BINARY_NAME := cortex-git-server
 BIN_DIR     := bin
-MODULE      := github.com/LucasSymons/Cortex/mcp/git-server
+MODULE      := github.com/cortex-sync/Cortex/mcp/git-server
 
 # Pinned golangci-lint; keep in step with the lint job in .github/workflows/ci.yml.
 GOLANGCI_LINT_VERSION := v2.12.2

@@ -1,10 +1,10 @@
 # Cortex
 
-[![CI](https://github.com/LucasSymons/Cortex/actions/workflows/ci.yml/badge.svg)](https://github.com/LucasSymons/Cortex/actions/workflows/ci.yml)
+[![CI](https://github.com/cortex-sync/Cortex/actions/workflows/ci.yml/badge.svg)](https://github.com/cortex-sync/Cortex/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cortex-sync/Cortex/graph/badge.svg)](https://codecov.io/gh/cortex-sync/Cortex)
-[![Release](https://img.shields.io/github/v/release/LucasSymons/Cortex?sort=semver)](https://github.com/LucasSymons/Cortex/releases)
+[![Release](https://img.shields.io/github/v/release/cortex-sync/Cortex?sort=semver)](https://github.com/cortex-sync/Cortex/releases)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](mcp/git-server/go.mod)
-[![License: MIT](https://img.shields.io/github/license/LucasSymons/Cortex)](LICENSE)
+[![License: MIT](https://img.shields.io/github/license/cortex-sync/Cortex)](LICENSE)
 
 > Your AI profile, synced everywhere.
 
@@ -29,7 +29,7 @@ running it — nothing to compile.
 On Windows, run Claude Code under WSL.
 
 ```shell
-/plugin marketplace add LucasSymons/Cortex
+/plugin marketplace add cortex-sync/Cortex
 /plugin install cortex@cortex
 ```
 

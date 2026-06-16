@@ -10,7 +10,7 @@ have accepted, and how to report a problem.
 Please **do not** open a public issue for a security problem. Instead, use
 GitHub's private vulnerability reporting: open the repository's **Security** tab
 and choose **Report a vulnerability**, or go straight to
-[the advisory form](https://github.com/LucasSymons/Cortex/security/advisories/new).
+[the advisory form](https://github.com/cortex-sync/Cortex/security/advisories/new).
 The report is a private advisory visible only to the maintainers, so it stays
 confidential until a fix ships.
 

@@ -1,4 +1,4 @@
-module github.com/LucasSymons/Cortex/mcp/git-server
+module github.com/cortex-sync/Cortex/mcp/git-server
 
 go 1.26.0
 

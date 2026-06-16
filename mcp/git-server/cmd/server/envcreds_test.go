@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LucasSymons/Cortex/mcp/git-server/internal/keychain"
+	"github.com/cortex-sync/Cortex/mcp/git-server/internal/keychain"
 )
 
 // setEnvCreds points the CORTEX_GIT_* variables at the given host for the

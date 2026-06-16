@@ -7,7 +7,7 @@ troubleshooting.
 > **Install:** add the marketplace, then install the plugin:
 >
 > ```shell
-> /plugin marketplace add LucasSymons/Cortex
+> /plugin marketplace add cortex-sync/Cortex
 > /plugin install cortex@cortex
 > ```
 >
@@ -74,7 +74,7 @@ model the Snyk extension uses.
 **Install:**
 
 1. Download `cortex-git_<version>_<os>_<arch>.mcpb` for your platform from the
-   [GitHub release](https://github.com/LucasSymons/Cortex/releases).
+   [GitHub release](https://github.com/cortex-sync/Cortex/releases).
 2. In Claude Desktop, open the **Connectors** page and add the `.mcpb`.
 3. When prompted, fill in the user config:
    - **Personal Access Token** (required, stored securely by Claude) - a PAT with

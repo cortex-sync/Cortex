@@ -7,11 +7,11 @@
   "long_description": "Cortex keeps a single AI profile - persona, CLAUDE.md, and memory - in a private Git repo so every Claude install is identical. This bundle installs the cortex-git MCP server (a self-contained binary) for the Claude Desktop app and Cowork. Provide a Personal Access Token for your Git host and Cortex can clone, commit, push, and pull your profile repo directly. Pair it with the Cortex skills and a connected profile-repo folder for the full experience.",
   "author": {
     "name": "Lucas Symons",
-    "url": "https://github.com/LucasSymons"
+    "url": "https://github.com/cortex-sync"
   },
-  "homepage": "https://github.com/LucasSymons/Cortex",
-  "documentation": "https://github.com/LucasSymons/Cortex#readme",
-  "support": "https://github.com/LucasSymons/Cortex/issues",
+  "homepage": "https://github.com/cortex-sync/Cortex",
+  "documentation": "https://github.com/cortex-sync/Cortex#readme",
+  "support": "https://github.com/cortex-sync/Cortex/issues",
   "license": "MIT",
   "icon": "icon.png",
   "keywords": ["profile", "memory", "sync", "git", "mcp", "cortex"],

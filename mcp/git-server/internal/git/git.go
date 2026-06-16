@@ -15,7 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 
-	"github.com/LucasSymons/Cortex/mcp/git-server/internal/secretscan"
+	"github.com/cortex-sync/Cortex/mcp/git-server/internal/secretscan"
 )
 
 // defaultBranch is the branch a new profile repo is initialised with. Set
