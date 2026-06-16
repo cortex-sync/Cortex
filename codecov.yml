@@ -1,0 +1,22 @@
+# Codecov configuration.
+#
+# Coverage is hard-gated in CI by a bash floor (see the `test` job in
+# .github/workflows/ci.yml, currently 70%). These settings drive the Codecov
+# dashboard, commit statuses, and PR comments - they are intentionally
+# low-noise so they inform rather than block (the repo has no required status
+# checks).
+coverage:
+  status:
+    project:
+      default:
+        # Don't drop below the base commit's coverage; allow a small wobble.
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        # Report coverage of changed lines, but never fail a PR on it.
+        informational: true
+
+comment:
+  layout: "reason, diff, files"
+  require_changes: false

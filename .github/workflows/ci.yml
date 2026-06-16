@@ -70,7 +70,8 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: mcp/git-server/coverage.out
-          # Tokenless OIDC upload (public repo); never fail CI on an upload hiccup.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Never fail CI on an upload hiccup; the bash floor above is the gate.
           fail_ci_if_error: false
 
   build:

@@ -1,7 +1,7 @@
 # Cortex
 
 [![CI](https://github.com/LucasSymons/Cortex/actions/workflows/ci.yml/badge.svg)](https://github.com/LucasSymons/Cortex/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/LucasSymons/Cortex/graph/badge.svg)](https://codecov.io/gh/LucasSymons/Cortex)
+[![codecov](https://codecov.io/gh/cortex-sync/Cortex/graph/badge.svg)](https://codecov.io/gh/cortex-sync/Cortex)
 [![Release](https://img.shields.io/github/v/release/LucasSymons/Cortex?sort=semver)](https://github.com/LucasSymons/Cortex/releases)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](mcp/git-server/go.mod)
 [![License: MIT](https://img.shields.io/github/license/LucasSymons/Cortex)](LICENSE)
