@@ -22,6 +22,160 @@ machine before the tag is cut.
 
 Open items, grouped by theme. Each becomes a branch + PR.
 
+## Security review (go-live, 2026-06-16)
+
+Findings from a multi-agent security review (each adversarially verified before
+inclusion). Verdict: **close, but two things block public release** - the one true
+credential bug (C1) and reconciling `SECURITY.md` so it stops claiming guarantees
+the code does not deliver (M5/M8/M9). Everything else is hardening, sequenced
+below. Supply-chain fixes are framed for a **public** project (Sigstore keyless
+signing, SLSA provenance, SHA/digest pinning) - no internal mirror.
+
+### Blockers - must fix before going public
+
+- [x] **(done 2026-06-16) C1 (critical) - HTTPS enforcement bypassed on push/pull;
+      PAT could travel cleartext.** `mcp/git-server/internal/git/git.go` - `RemoteHost`
+      now resolves the origin via `RequireHTTPS` (was `ParseHost`), so the push/pull
+      credential gate fails closed on any non-https or userinfo origin before a PAT is
+      read or sent, matching the clone/init paths. The unsafe `ParseHost` primitive was
+      deleted (internal pkg, no external consumers). Regression test
+      `TestRemoteHostRejectsInsecureOrigin` covers http/ssh/userinfo origins; `make
+      validate` green. Note: this makes the SECURITY.md "https enforced / fails closed"
+      claim true on the push/pull path - the truth-in-docs item below still needs M5/M8/M9.
+- [ ] **Truth-in-docs - reconcile `SECURITY.md` with reality.** Fix the control or
+      correct the claim for: the "https enforced / fails closed" line (C1), the
+      content-scan "fails closed" backstop (M8), the "non-portable / machine-bound"
+      file key (M9), and "catches AWS keys" (M5). A public security tool cannot ship
+      docs that over-promise.
+
+### Credential handling
+
+- [ ] **M9 (medium) - encrypted-file key silently degrades to a public constant.**
+      `internal/keychain/file_store.go:236-246` (`deriveKey`), `257-270` (`machineID`).
+      In a container/minimal image with no `/etc/machine-id` and a guessable hostname,
+      the AES key collapses to `sha256(keyDomain + "cortex-default-machine" + uid)` -
+      all public - making `credentials.enc` portable and offline-decryptable.
+      Contradicts the "machine-bound" claim, and degrades silently in exactly the
+      headless target the file backend exists for. **Fix:** refuse the file backend
+      (or require explicit opt-in / passphrase) when no genuine machine identifier is
+      available; at minimum warn loudly when falling back below `/etc/machine-id`.
+      *(Ties into the existing "Passphrase mode" enhancement and the done `machineID`
+      security-note leftover - this is the enforcement half.)*
+- [ ] **L2 (low) - `set_credentials`/`delete_credentials` model-callable, no
+      confirmation.** `cmd/server/main.go:276-298`. `delete_credentials` silently wipes
+      a stored PAT from model-supplied args (and "succeeds" even if none was stored).
+      **Fix:** require explicit user confirmation for credential mutations and echo
+      the affected host; consider driving these from a user-initiated skill rather
+      than a model-callable tool.
+- [ ] **L4 (low) - `hostsEqual` does no IDN/punycode normalisation.**
+      `cmd/server/envcreds.go:63-68`. Only lowercases/trims; a punycode/Unicode
+      confusable origin can make env-token scoping behave inconsistently (compounded
+      by C1). **Fix:** normalise both hosts via `golang.org/x/net/idna` before exact
+      comparison; reject non-normalisable hosts.
+- [ ] *(info, optional)* enforce `0700` on the credentials dir when it pre-exists
+      (`internal/keychain/file_store.go:158-161`); add a regression test asserting no
+      credential-handler output ever contains the token (PAT-in-logs verified clean
+      today - keep it that way).
+
+### Git operations / tool surface
+
+- [ ] **M1 (medium) - all path-taking git tools accept arbitrary, unvalidated paths.**
+      `cmd/server/main.go:168-258`. Model-supplied `repo_path`/`local_path` go straight
+      to go-git with no `Clean`/`Abs`, no allowlist, no confinement. A prompt-injection
+      can point ops outside scope (`git_status` freely reachable for path disclosure).
+      **Fix:** confine all path args to a configurable root (e.g. `CORTEX_REPO_ROOT`),
+      reject relative paths and anything resolving outside it after `Abs` +
+      `EvalSymlinks` - mirror the `os.Root` confinement already used in `secretscan`.
+      `git_init` also reuses an existing repo and stages `All:true` - refuse a
+      non-empty pre-existing dir unless it is the expected profile repo.
+- [ ] **M2 (medium) - `git_pull` does a destructive `HardReset` with no gate.**
+      `internal/git/git.go:139-188`, invoked at `cmd/server/main.go:197`. Discards
+      diverging commits and uncommitted changes onto origin's tip - no confirmation,
+      dry-run, or backup. **Fix:** gate the hard reset behind an explicit destructive
+      flag, refuse to reset a dirty worktree unless opted in (or auto-stash), and
+      confine to the profile root per M1. *(Related: the existing "Better pull conflict
+      strategy than last-write-wins" enhancement.)*
+
+### Secret scanning (control fitness)
+
+- [ ] **M8 (medium) - content scan fails open for binary, oversized, and deleted
+      files.** `internal/secretscan/secretscan.go:132,146-148`; `internal/git/git.go:90-107`.
+      `scanFile` silently returns zero findings (commit proceeds) for files >5 MiB and
+      any file with a NUL byte. **Fix:** scan the readable portion of oversized files,
+      do not skip a text-dominated file on a single NUL, and **fail the commit** (not
+      silently skip) when a staged file cannot be scanned - or stop calling it "fails
+      closed" in the docs.
+- [ ] **M5 (medium) - AWS secret access key not detected (only the `AKIA` key ID).**
+      `internal/secretscan/secretscan.go:45-46`. The 40-char secret key, including the
+      realistic `aws_secret_access_key = ...` form, produces no match; no Azure
+      storage-key/connection-string rule either. **Fix:** add a contextual rule keyed
+      on `aws_secret_access_key` near a 40-char base64 value, add Azure
+      `AccountKey`/connection-string patterns, and make `SECURITY.md` explicit about
+      coverage.
+- [ ] **M6 (medium) - generic secret rule misses all unquoted assignments.**
+      `internal/secretscan/secretscan.go:53`. Requires quoted values, so
+      `password=...`, `DB_PASSWORD=...`, `client_secret: ...` (the dominant `.env`/YAML
+      shapes) all miss. **Fix:** make surrounding quotes optional, bound an unquoted
+      value to non-whitespace; add unquoted env/YAML test cases.
+- [ ] **M7 (medium) - PEM `ENCRYPTED PRIVATE KEY` header not matched.**
+      `internal/secretscan/secretscan.go:47`. The PKCS#8 encrypted-key header produces
+      no match and the body has no shape rule, so the whole key commits uncaught.
+      **Fix:** one-token addition - `-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----`.
+- [ ] **L3 (low) - gitleaks allowlist whitelists entire test files.**
+      `.gitleaks.toml:21-26`. Blanket path exemptions for `secretscan_test.go`/
+      `git_test.go` mean a real secret added to those files is invisible to CI and the
+      hook. **Fix:** scope the allowlist to specific fixture strings, or use
+      commit/line-level allowlisting.
+
+### Supply chain / release integrity (do M3 + M4 + M12 as one piece of work)
+
+- [ ] **M3 (medium) - release pipeline produces no signed/attested artifacts.**
+      `.goreleaser.yaml:46-77`; `.github/workflows/release.yml`. Emits `checksums.txt`
+      only - no signing, SBOM, or provenance; `.mcpb` bundles attached unsigned.
+      **Fix (public-friendly):** add a goreleaser `signs:` stanza using **cosign
+      keyless** (Sigstore + GitHub OIDC - no key management), add `sboms:` (syft), and
+      add `actions/attest-build-provenance` for SLSA provenance in `release.yml`.
+      *(Supersedes the optional "cosign-sign release artifacts" item below - promote it
+      from optional to a go-live hardening task.)*
+- [ ] **M4 (medium) - launcher checksum is self-referential, not anchored.**
+      `bin/cortex-git-launch.sh:64-89`. Fetches the binary **and** `checksums.txt` from
+      the same `$CORTEX_GIT_RELEASE_BASE` and verifies one against the other - protects
+      against in-transit corruption only, not a compromised host or a malicious mirror.
+      First-run code-exec path carrying the PAT. **Fix:** verify a cosign signature over
+      `checksums.txt` against the repo's keyless OIDC identity (`cosign verify-blob
+      --certificate-identity ...`), or pin per-platform SHA-256 inside the shipped repo.
+      Treat `CORTEX_GIT_RELEASE_BASE` overrides as lowering trust (test builds only).
+- [ ] **M12 (medium) - `.mcpb` bundle has no integrity verification; manifest injects
+      PAT as plaintext env.** `scripts/pack-mcpb.sh:96-124`; `mcpb/manifest.json:24-28,
+      37-42`; `release.yml:57`. The `.mcpb` is a plain zip with no checksum/signature of
+      its own, and the manifest passes the token as `CORTEX_GIT_TOKEN` (readable via
+      `/proc/PID/environ`). **Fix:** publish + cosign-sign checksums for the `.mcpb`
+      bundles and verify on install; document the env-readability exposure. *(Folds into
+      the existing ".mcpb binary is a separate build, not in checksums.txt" known gap -
+      close them together.)*
+- [ ] **M10 (medium) - all GitHub Actions pinned by mutable tag, not commit SHA.**
+      `.github/workflows/*` (`checkout@v6`, `setup-go@v6`, `golangci-lint-action@v9`,
+      `codecov-action@v5`, `codeql-action/*@v3`, `goreleaser-action@v7`). Tag-move
+      injection risk, worst in `release.yml` (`contents: write` + tokens). **Fix:** pin
+      every `uses:` to a full 40-char commit SHA (version in a trailing comment);
+      Dependabot already present to bump them.
+- [ ] **M11 (medium) - gitleaks binary downloaded with no integrity verification.**
+      `.github/workflows/ci.yml:176-179`. `curl`'d + `install`'d with no checksum, then
+      run as the secret-scanning gate. **Fix:** pin and verify the tarball SHA-256
+      against a repo-committed value before `tar`/`install` (public GitHub release is
+      fine - just verify it).
+- [ ] **L1 (low) - lefthook installed via `go install ...@latest`.** `Makefile:54`.
+      Moving target for the binary that drives every dev's pre-commit hooks. **Fix:**
+      pin to an explicit tagged version (public GOPROXY is fine for an OSS project) -
+      consistent with the already-pinned golangci-lint/gosec/govulncheck.
+- [ ] **L5 (low) - e2e Gitea image on a mutable Docker Hub tag.** `e2e/Dockerfile:6`
+      (`FROM gitea/gitea:1.26`). The e2e job gates releases, so a re-pushed tag changes
+      release-blocking behaviour. **Fix:** pin by digest (`gitea/gitea@sha256:...`).
+- [ ] **L6 (low) - e2e TLS private key written world-readable (`chmod 644`).**
+      `e2e/gen-certs.sh:36`. Disposable localhost-only self-signed key, minimal impact,
+      but readable by other local users mid-run. **Fix:** prefer `640` with a shared
+      group; ensure `certs/` is gitignored.
+
 ## Setup / onboarding UX
 
 - [x] **(done 2026-06-12, v0.1.1) Import an existing setup.** `/setup` Section 0
