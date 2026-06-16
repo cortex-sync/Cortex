@@ -25,8 +25,8 @@ import (
 
 const (
 	// maxFileSize caps how much of any single file is read. Profile and memory
-	// files are small; a file larger than this cannot be fully scanned, so the
-	// gate fails closed and blocks it rather than waving the unread tail through.
+	// files are small; for anything larger only the first maxFileSize is read, so
+	// a secret in the readable head is still caught while the tail is not scanned.
 	maxFileSize = 5 << 20 // 5 MiB
 	// maxLineLen bounds the scanner's per-line buffer. Base64-encoded keys can be
 	// long, so allow generous lines without risking unbounded memory.
@@ -36,14 +36,6 @@ const (
 	// window marks the file binary; a stray NUL further in does not, so a
 	// text-dominated file is still scanned rather than skipped.
 	binarySniffLen = 8000
-)
-
-// Synthetic rule names for files the gate cannot content-scan. They are reported
-// like any other finding so an unscannable file fails the commit closed rather
-// than slipping through unverified.
-const (
-	ruleUnscannableBinary = "unscannable-binary"
-	ruleUnscannableLarge  = "unscannable-too-large"
 )
 
 // rule pairs a stable, human-readable name with a compiled detection pattern.
@@ -86,19 +78,14 @@ type Finding struct {
 	Line int    // 1-based line number of the match
 }
 
-// String renders a finding as "path:line (rule)", or "path (rule)" for a
-// whole-file finding with no line (an unscannable file).
+// String renders a finding as "path:line (rule)".
 func (f Finding) String() string {
-	if f.Line <= 0 {
-		return fmt.Sprintf("%s (%s)", f.Path, f.Rule)
-	}
 	return fmt.Sprintf("%s:%d (%s)", f.Path, f.Line, f.Rule)
 }
 
 // BlockedError is returned by callers when a commit is refused because changed
-// files contain likely secrets or could not be scanned. Its message is
-// actionable and never contains a secret value, so it is safe to surface
-// directly to the user.
+// files contain likely secrets. Its message is actionable and never contains a
+// secret value, so it is safe to surface directly to the user.
 type BlockedError struct {
 	Findings []Finding
 }
@@ -106,8 +93,8 @@ type BlockedError struct {
 // Error renders an actionable, secret-free summary of every finding.
 func (e *BlockedError) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "refusing to commit: %d secret-scan finding(s). "+
-		"Remove the secret, or add the path to .gitignore if it is intentional, then retry:", len(e.Findings))
+	fmt.Fprintf(&b, "refusing to commit: %d potential secret(s) detected. "+
+		"Remove the secret or add the path to .gitignore, then retry:", len(e.Findings))
 	for _, f := range e.Findings {
 		fmt.Fprintf(&b, "\n  - %s", f.String())
 	}
@@ -116,10 +103,9 @@ func (e *BlockedError) Error() string {
 
 // ScanFiles scans each of paths (relative to root) for secrets and returns all
 // findings, ordered by path then line for stable output. Missing files (e.g.
-// staged deletions) and directories carry no committed content and are skipped.
-// Files that cannot be content-scanned - oversized or binary - fail closed: they
-// yield a whole-file finding so the commit is blocked rather than letting unread
-// content through. An error is returned only for unexpected I/O failures.
+// staged deletions), directories, and binary files are skipped; a file larger
+// than maxFileSize has its readable head scanned (the tail is not). An error is
+// returned only for unexpected I/O failures, which fail closed at the caller.
 func ScanFiles(root string, paths []string) ([]Finding, error) {
 	// Confine all file access beneath root with os.Root: any path that tries to
 	// escape the scan root - via a "../" segment or a symlink pointing outside -
@@ -150,10 +136,14 @@ func ScanFiles(root string, paths []string) ([]Finding, error) {
 
 // scanFile scans a single file, reporting at most one finding per rule (the
 // first match) to keep output concise. Files that do not exist (staged
-// deletions) or are directories yield no findings and no error. Files that
-// cannot be scanned - larger than maxFileSize, or binary (a NUL byte in the
-// first binarySniffLen bytes) - fail closed, returning a single whole-file
-// finding so the caller blocks the commit.
+// deletions), directories, and binary files (a NUL byte in the first
+// binarySniffLen bytes) yield no findings and no error. A file larger than
+// maxFileSize is not skipped: its first maxFileSize bytes are scanned, so a
+// secret in the readable head is still caught.
+//
+// The scan is tuned for accidental credential pastes into text, not adversarial
+// obfuscation, so binary blobs and the tail of an oversized file are out of
+// scope - the profile .gitignore and the skill-level filename gate cover those.
 func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 	info, err := root.Stat(relPath)
 	if err != nil {
@@ -165,11 +155,6 @@ func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 	if info.IsDir() {
 		return nil, nil // a directory carries no content of its own
 	}
-	if info.Size() > maxFileSize {
-		// Too large to read in full: a secret could hide beyond the scan window,
-		// so block rather than scan a prefix and wave the rest through.
-		return []Finding{{Path: relPath, Rule: ruleUnscannableLarge}}, nil
-	}
 
 	f, err := root.Open(relPath)
 	if err != nil {
@@ -177,6 +162,8 @@ func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 	}
 	defer func() { _ = f.Close() }() // read-only file; close error is immaterial
 
+	// Read only the head: an oversized file is scanned up to the limit rather
+	// than skipped, catching a secret pasted near the top.
 	data, err := io.ReadAll(io.LimitReader(f, maxFileSize))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", relPath, err)
@@ -186,8 +173,7 @@ func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 		sniff = sniff[:binarySniffLen]
 	}
 	if bytes.IndexByte(sniff, 0) != -1 {
-		// Binary content cannot be meaningfully scanned for text secrets: block.
-		return []Finding{{Path: relPath, Rule: ruleUnscannableBinary}}, nil
+		return nil, nil // binary content; not text-scannable, skip
 	}
 
 	var findings []Finding
@@ -208,8 +194,11 @@ func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 			}
 		}
 	}
-	if err := sc.Err(); err != nil {
+	if err := sc.Err(); err != nil && !errors.Is(err, bufio.ErrTooLong) {
 		return nil, fmt.Errorf("scanning %s: %w", relPath, err)
 	}
+	// A line longer than maxLineLen (bufio.ErrTooLong) is a data blob, not pasted
+	// prose: stop at it and keep the findings from the lines already scanned,
+	// rather than failing the whole commit. Out of scope, like binary content.
 	return findings, nil
 }

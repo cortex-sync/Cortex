@@ -69,46 +69,40 @@ func TestScanFilesCleanContent(t *testing.T) {
 	}
 }
 
-func TestScanFilesSkipsMissingAndDir(t *testing.T) {
+func TestScanFilesSkipsMissingDirAndBinary(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "subdir"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A staged deletion and a directory carry no committed content, so both are
-	// skipped without a finding.
-	findings, err := ScanFiles(root, []string{"does-not-exist.md", "subdir"})
+	// A staged deletion, a directory, and a binary blob all yield no finding: the
+	// gate targets accidental pastes into text, not binary content (which the
+	// profile .gitignore and filename gate cover). The key-shaped string inside
+	// the binary must be ignored.
+	writeFile(t, root, "blob.bin", "AKIAIOSFODNN7EXAMPLE\x00\x01\x02")
+
+	findings, err := ScanFiles(root, []string{"does-not-exist.md", "subdir", "blob.bin"})
 	if err != nil {
 		t.Fatalf("ScanFiles: %v", err)
 	}
 	if len(findings) != 0 {
-		t.Fatalf("findings = %v, want none (missing/dir skipped)", findings)
+		t.Fatalf("findings = %v, want none (missing/dir/binary skipped)", findings)
 	}
 }
 
-// TestScanFilesFailsClosedOnUnscannable is the regression guard for the M8
-// finding: a file the gate cannot read in full must block the commit rather than
-// pass unverified.
-func TestScanFilesFailsClosedOnUnscannable(t *testing.T) {
+// TestScanFilesScansOversizedFileHead confirms an oversized file is not skipped:
+// its readable head is scanned, so a secret near the top is still caught even
+// though the file exceeds maxFileSize.
+func TestScanFilesScansOversizedFileHead(t *testing.T) {
 	root := t.TempDir()
-	// Binary: a NUL in the sniff window. A real secret hidden in binary would
-	// otherwise slip through, so the whole file is flagged unscannable.
-	writeFile(t, root, "blob.bin", "AKIAIOSFODNN7EXAMPLE\x00\x01\x02")
-	// Oversized: larger than maxFileSize, so the tail cannot be read.
-	writeFile(t, root, "big.dat", strings.Repeat("a", maxFileSize+1))
+	content := "slack = xoxb-1234567890-abcdef\n" + strings.Repeat("a", maxFileSize+1)
+	writeFile(t, root, "big.log", content)
 
-	findings, err := ScanFiles(root, []string{"blob.bin", "big.dat"})
+	findings, err := ScanFiles(root, []string{"big.log"})
 	if err != nil {
 		t.Fatalf("ScanFiles: %v", err)
 	}
-	got := map[string]string{}
-	for _, f := range findings {
-		got[f.Path] = f.Rule
-	}
-	if got["blob.bin"] != ruleUnscannableBinary {
-		t.Fatalf("blob.bin rule = %q, want %q", got["blob.bin"], ruleUnscannableBinary)
-	}
-	if got["big.dat"] != ruleUnscannableLarge {
-		t.Fatalf("big.dat rule = %q, want %q", got["big.dat"], ruleUnscannableLarge)
+	if len(findings) != 1 || findings[0].Rule != "slack-token" {
+		t.Fatalf("findings = %v, want one slack-token (oversized head scanned)", findings)
 	}
 }
 

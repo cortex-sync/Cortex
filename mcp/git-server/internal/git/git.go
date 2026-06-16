@@ -91,10 +91,10 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 	// committing. This is the last line of defence behind the skill-level
 	// filename gate - it catches a credential pasted into a file's body, which a
 	// filename check cannot, and runs even if the skill gate is bypassed. It is
-	// tuned for accidental pastes rather than adversarial obfuscation (the
-	// ruleset targets high-signal credential shapes), but it fails closed: a file
-	// that cannot be scanned - binary or oversized - blocks the commit rather
-	// than passing unverified.
+	// tuned for accidental pastes into text rather than adversarial obfuscation:
+	// binary blobs are skipped and oversized files are scanned only up to the
+	// limit (see secretscan), with the profile .gitignore and filename gate
+	// covering that residue.
 	paths := make([]string, 0, len(status))
 	for path := range status {
 		paths = append(paths, path)
