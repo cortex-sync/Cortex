@@ -77,10 +77,12 @@ passphrase mode for stronger at-rest protection is tracked in
 - PATs are **never written to files** by Cortex (other than the encrypted store
   above) and are **never echoed back** in tool output.
 - **Transport is HTTPS + PAT only.** No SSH. The `https://` scheme is enforced
-  on every remote URL (`RequireHTTPS` in `internal/git`): `git_clone` and
-  `git_init` reject `http`, `file`, `git`, `ssh`, scp-style, schemeless, and
-  empty URLs, failing closed so a PAT can never travel over cleartext or an
-  unexpected transport.
+  by `RequireHTTPS` (`internal/git`) on every path that sends the PAT, failing
+  closed: `git_clone` and `git_init` validate the caller-supplied URL, and
+  `git_commit_push` and `git_pull` re-validate the repo's stored origin before
+  any credential is resolved. `http`, `file`, `git`, `ssh`, scp-style,
+  schemeless, empty, and credential-embedding (`user:token@host`) URLs are all
+  rejected, so a PAT can never travel over cleartext or an unexpected transport.
 
 > **Caveat - tokens in the transcript.** `set_credentials` receives the PAT as a
 > tool argument, which means the raw token passes through the model's context
