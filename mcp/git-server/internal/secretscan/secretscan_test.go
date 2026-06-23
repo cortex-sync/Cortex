@@ -123,6 +123,25 @@ func TestScanFilesScansTextDominatedFileWithLateNUL(t *testing.T) {
 	}
 }
 
+// TestScanFilesToleratesOverlongLine confirms a single line longer than the
+// scanner's buffer (a data blob, not pasted prose) does not fail the commit:
+// the scan stops at it but keeps findings from the lines already read.
+func TestScanFilesToleratesOverlongLine(t *testing.T) {
+	root := t.TempDir()
+	// A real secret on its own line, then an unscannable >maxLineLen single line
+	// (kept under maxFileSize so the file is read, not head-truncated).
+	content := "slack = xoxb-1234567890-abcdef\n" + strings.Repeat("a", maxLineLen+1)
+	writeFile(t, root, "blob.txt", content)
+
+	findings, err := ScanFiles(root, []string{"blob.txt"})
+	if err != nil {
+		t.Fatalf("ScanFiles returned an error for an overlong line; want it swallowed: %v", err)
+	}
+	if len(findings) != 1 || findings[0].Rule != "slack-token" {
+		t.Fatalf("findings = %v, want one slack-token from the line before the overlong one", findings)
+	}
+}
+
 func TestScanFilesReportsLineAndPath(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "creds.md", "line one\nline two\nslack = xoxb-1234567890-abcdef\n")

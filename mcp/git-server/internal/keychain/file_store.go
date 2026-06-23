@@ -29,6 +29,16 @@ const machineIDEnvVar = "CORTEX_MACHINE_ID"
 // once per process rather than on every encrypt/decrypt call.
 var weakKeyWarnOnce sync.Once
 
+// weakKeyWarnWriter is where warnWeakKey writes. It is os.Stderr in production
+// (stdout carries the stdio MCP protocol and must not be polluted); tests swap
+// it to capture the warning.
+var weakKeyWarnWriter io.Writer = os.Stderr
+
+// machineIDPaths is the ordered list of OS machine-id files consulted for a
+// genuine machine-bound identifier. A package var so tests can point it at
+// nonexistent paths to exercise the unbound fallback.
+var machineIDPaths = []string{"/etc/machine-id", "/var/lib/dbus/machine-id"}
+
 // credEntry is a single host's stored credentials.
 type credEntry struct {
 	Username string `json:"username"`
@@ -280,7 +290,7 @@ func machineID() (id string, bound bool) {
 	if v := strings.TrimSpace(os.Getenv(machineIDEnvVar)); v != "" {
 		return v, true
 	}
-	for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+	for _, p := range machineIDPaths {
 		// #nosec G304 -- p is a fixed internal list of machine-id paths, not user input
 		if b, err := os.ReadFile(p); err == nil {
 			if s := strings.TrimSpace(string(b)); s != "" {
@@ -298,7 +308,7 @@ func machineID() (id string, bound bool) {
 // without a machine-bound key and is therefore portable. Written to stderr so it
 // never corrupts the stdio MCP protocol channel on stdout.
 func warnWeakKey() {
-	fmt.Fprintf(os.Stderr,
+	_, _ = fmt.Fprintf(weakKeyWarnWriter,
 		"cortex-git: WARNING: no machine-bound identifier found (no /etc/machine-id "+
 			"and %s unset); the encrypted credential store is keyed on a guessable "+
 			"value and is therefore PORTABLE, not machine-bound. Set %s to a stable "+

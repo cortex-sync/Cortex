@@ -1,12 +1,25 @@
 package keychain
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+// forceUnboundMachineID makes machineID() report bound=false for the duration of
+// the test by clearing the env override and pointing the machine-id lookup at a
+// path that does not exist, so the resolver falls through to the hostname.
+func forceUnboundMachineID(t *testing.T) {
+	t.Helper()
+	t.Setenv(machineIDEnvVar, "")
+	saved := machineIDPaths
+	machineIDPaths = []string{filepath.Join(t.TempDir(), "no-such-machine-id")}
+	t.Cleanup(func() { machineIDPaths = saved })
+}
 
 func newTestFileStore(t *testing.T) *fileStore {
 	t.Helper()
@@ -137,5 +150,53 @@ func TestFileStoreKeyBindsToMachineID(t *testing.T) {
 	fsTwo := &fileStore{path: path}
 	if _, _, err := fsTwo.Get("gitlab.com"); err == nil {
 		t.Fatal("store decrypted under a different machine id; key is not bound to the machine")
+	}
+}
+
+// TestMachineIDUnboundFallsBack verifies that with no env override and no
+// readable machine-id file, machineID() falls back to a non-bound identifier
+// (the M9 unbound path) rather than reporting a false machine binding.
+func TestMachineIDUnboundFallsBack(t *testing.T) {
+	forceUnboundMachineID(t)
+
+	id, bound := machineID()
+	if bound {
+		t.Fatalf("machineID() = (%q, true), want bound=false with no machine-id source", id)
+	}
+	if id == "" {
+		t.Fatal("machineID() returned an empty identifier")
+	}
+}
+
+// TestFileStoreWarnsOnceWhenUnbound proves the M9 fix: when the key cannot be
+// bound to the machine, deriveKey emits the portability warning exactly once per
+// process (not silently, and not on every call), and the store still functions.
+func TestFileStoreWarnsOnceWhenUnbound(t *testing.T) {
+	forceUnboundMachineID(t)
+
+	var buf bytes.Buffer
+	savedWriter := weakKeyWarnWriter
+	weakKeyWarnWriter = &buf
+	weakKeyWarnOnce = sync.Once{}
+	t.Cleanup(func() {
+		weakKeyWarnWriter = savedWriter
+		weakKeyWarnOnce = sync.Once{}
+	})
+
+	fs := &fileStore{path: filepath.Join(t.TempDir(), "credentials.enc")}
+	if err := fs.Set("gitlab.com", "alice", "token-aaa"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	// A second key derivation (Get) must not produce a second warning.
+	if _, _, err := fs.Get("gitlab.com"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "PORTABLE") || !strings.Contains(out, machineIDEnvVar) {
+		t.Fatalf("warning did not name the portability risk or the override var: %q", out)
+	}
+	if n := strings.Count(out, "WARNING"); n != 1 {
+		t.Fatalf("warning emitted %d times across two derivations, want exactly 1", n)
 	}
 }
