@@ -25,11 +25,13 @@ Open items, grouped by theme. Each becomes a branch + PR.
 ## Security review (go-live, 2026-06-16)
 
 Findings from a multi-agent security review (each adversarially verified before
-inclusion). Verdict: **close, but two things block public release** - the one true
-credential bug (C1) and reconciling `SECURITY.md` so it stops claiming guarantees
-the code does not deliver (M5/M8/M9). Everything else is hardening, sequenced
-below. Supply-chain fixes are framed for a **public** project (Sigstore keyless
-signing, SLSA provenance, SHA/digest pinning) - no internal mirror.
+inclusion). Original verdict: **close, but two things block public release** - the
+one true credential bug (C1) and reconciling `SECURITY.md` so it stops claiming
+guarantees the code does not deliver (M5/M8/M9). **Both blockers are now cleared**
+(C1 via #19; the truth-in-docs reconciliation, M5/M6/M7/M8/M9, via #20). Everything
+else is hardening, sequenced below. Supply-chain fixes are framed for a **public**
+project (Sigstore keyless signing, SLSA provenance, SHA/digest pinning) - no
+internal mirror.
 
 ### Blockers - must fix before going public
 
@@ -42,25 +44,29 @@ signing, SLSA provenance, SHA/digest pinning) - no internal mirror.
       `TestRemoteHostRejectsInsecureOrigin` covers http/ssh/userinfo origins; `make
       validate` green. Note: this makes the SECURITY.md "https enforced / fails closed"
       claim true on the push/pull path - the truth-in-docs item below still needs M5/M8/M9.
-- [ ] **Truth-in-docs - reconcile `SECURITY.md` with reality.** Fix the control or
-      correct the claim for: the "https enforced / fails closed" line (C1), the
-      content-scan "fails closed" backstop (M8), the "non-portable / machine-bound"
-      file key (M9), and "catches AWS keys" (M5). A public security tool cannot ship
-      docs that over-promise.
+- [x] **(done 2026-06-23, PR #20) Truth-in-docs - reconcile `SECURITY.md` with
+      reality.** Each over-promise was resolved by fixing the control where it could
+      deliver and dialling the claim back where it could not: the "https enforced /
+      fails closed" line (C1, via #19), the content-scan coverage and oversized/binary
+      behaviour (M8 - now "scans the readable head, skips binary", not "fails closed"),
+      the machine-binding caveat (M9 - documents the unbound fallback and the
+      `CORTEX_MACHINE_ID` override), and secret-scan coverage (M5/M6/M7). `make
+      validate` green.
 
 ### Credential handling
 
-- [ ] **M9 (medium) - encrypted-file key silently degrades to a public constant.**
-      `internal/keychain/file_store.go:236-246` (`deriveKey`), `257-270` (`machineID`).
-      In a container/minimal image with no `/etc/machine-id` and a guessable hostname,
-      the AES key collapses to `sha256(keyDomain + "cortex-default-machine" + uid)` -
-      all public - making `credentials.enc` portable and offline-decryptable.
-      Contradicts the "machine-bound" claim, and degrades silently in exactly the
-      headless target the file backend exists for. **Fix:** refuse the file backend
-      (or require explicit opt-in / passphrase) when no genuine machine identifier is
-      available; at minimum warn loudly when falling back below `/etc/machine-id`.
-      *(Ties into the existing "Passphrase mode" enhancement and the done `machineID`
-      security-note leftover - this is the enforcement half.)*
+- [x] **(done 2026-06-23, PR #20) M9 (medium) - encrypted-file key silently degrades
+      to a public constant.** `internal/keychain/file_store.go` (`deriveKey`,
+      `machineID`). `machineID` now reports whether the identifier is genuinely
+      machine-bound; when it is not (no `/etc/machine-id`, falling back to hostname or
+      the constant) `deriveKey` emits a one-time loud stderr warning that the store is
+      PORTABLE, instead of degrading silently. A new `CORTEX_MACHINE_ID` env override
+      lets headless/container deployments supply a stable secret identifier to restore
+      real binding. Took the "warn loudly + opt-in restore" path rather than refusing
+      the backend outright, so existing stores are unaffected. Regression tests cover
+      the override, the machine binding, and the warn-once behaviour; `make validate`
+      green. *(The "Passphrase mode" enhancement remains the upgrade path for real
+      at-rest crypto.)*
 - [ ] **L2 (low) - `set_credentials`/`delete_credentials` model-callable, no
       confirmation.** `cmd/server/main.go:276-298`. `delete_credentials` silently wipes
       a stored PAT from model-supplied args (and "succeeds" even if none was stored).
@@ -98,29 +104,35 @@ signing, SLSA provenance, SHA/digest pinning) - no internal mirror.
 
 ### Secret scanning (control fitness)
 
-- [ ] **M8 (medium) - content scan fails open for binary, oversized, and deleted
-      files.** `internal/secretscan/secretscan.go:132,146-148`; `internal/git/git.go:90-107`.
-      `scanFile` silently returns zero findings (commit proceeds) for files >5 MiB and
-      any file with a NUL byte. **Fix:** scan the readable portion of oversized files,
-      do not skip a text-dominated file on a single NUL, and **fail the commit** (not
-      silently skip) when a staged file cannot be scanned - or stop calling it "fails
-      closed" in the docs.
-- [ ] **M5 (medium) - AWS secret access key not detected (only the `AKIA` key ID).**
-      `internal/secretscan/secretscan.go:45-46`. The 40-char secret key, including the
-      realistic `aws_secret_access_key = ...` form, produces no match; no Azure
-      storage-key/connection-string rule either. **Fix:** add a contextual rule keyed
-      on `aws_secret_access_key` near a 40-char base64 value, add Azure
-      `AccountKey`/connection-string patterns, and make `SECURITY.md` explicit about
-      coverage.
-- [ ] **M6 (medium) - generic secret rule misses all unquoted assignments.**
-      `internal/secretscan/secretscan.go:53`. Requires quoted values, so
-      `password=...`, `DB_PASSWORD=...`, `client_secret: ...` (the dominant `.env`/YAML
-      shapes) all miss. **Fix:** make surrounding quotes optional, bound an unquoted
-      value to non-whitespace; add unquoted env/YAML test cases.
-- [ ] **M7 (medium) - PEM `ENCRYPTED PRIVATE KEY` header not matched.**
-      `internal/secretscan/secretscan.go:47`. The PKCS#8 encrypted-key header produces
-      no match and the body has no shape rule, so the whole key commits uncaught.
-      **Fix:** one-token addition - `-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----`.
+- [x] **(done 2026-06-23, PR #20) M8 (medium) - content scan fails open for binary,
+      oversized, and deleted files.** `internal/secretscan/secretscan.go`;
+      `internal/git/git.go`. `scanFile` now scans the first `maxFileSize` of an
+      oversized file (head scanned, tail out of scope) instead of skipping it, and
+      uses git's first-8 KiB NUL heuristic so a text file with a late stray NUL is
+      still scanned. An overlong single line is tolerated (data blob, not pasted
+      prose) without failing the commit. Resolution: rather than hard "fail closed"
+      on every unscannable file, the gate is documented as a best-effort guard for
+      accidental pastes into text, with `SECURITY.md` and `git.go` comments dialled
+      back to match - the `.gitignore` and filename gate cover binary/tail residue.
+      Regression tests cover oversized-head, late-NUL, and overlong-line cases; `make
+      validate` green.
+- [x] **(done 2026-06-23, PR #20) M5 (medium) - AWS secret access key not detected
+      (only the `AKIA` key ID).** `internal/secretscan/secretscan.go`. Added an
+      `aws-secret-access-key` rule keyed on the conventional assignment context near a
+      40-char value, plus an `azure-storage-key` rule for `AccountKey=`/
+      `SharedAccessKey=` connection-string values. `SECURITY.md` coverage list
+      updated. Regression tests added; `make validate` green.
+- [x] **(done 2026-06-23, PR #20) M6 (medium) - generic secret rule misses all
+      unquoted assignments.** `internal/secretscan/secretscan.go`. The
+      `generic-secret-assignment` rule now matches a quoted OR an unquoted value
+      (bounded to non-whitespace), catching the dominant `DB_PASSWORD=...` /
+      `client_secret: ...` `.env`/YAML shapes. False positives on prose kept low by
+      requiring the compound identifiers (which English writes with spaces); a
+      clean-prose regression test guards this. `make validate` green.
+- [x] **(done 2026-06-23, PR #20) M7 (medium) - PEM `ENCRYPTED PRIVATE KEY` header
+      not matched.** `internal/secretscan/secretscan.go`. `ENCRYPTED ` added to the
+      `private-key-block` header alternation. Regression test covers the PKCS#8
+      encrypted-key header; `make validate` green.
 - [ ] **L3 (low) - gitleaks allowlist whitelists entire test files.**
       `.gitleaks.toml:21-26`. Blanket path exemptions for `secretscan_test.go`/
       `git_test.go` mean a real secret added to those files is invisible to CI and the

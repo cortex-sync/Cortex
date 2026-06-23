@@ -56,8 +56,9 @@ When no OS keychain is available, credentials are written to
 - **AES-256-GCM**, with the random nonce prefixed to the ciphertext.
 - File mode `0600`, written atomically (temp file + rename).
 - The key is derived (SHA-256) from a machine-bound identifier
-  (`/etc/machine-id`) mixed with the current user's id and a fixed domain
-  string, so the file is **non-portable** and never stored as plaintext.
+  (`/etc/machine-id`, or `CORTEX_MACHINE_ID` if set) mixed with the current
+  user's id and a fixed domain string, so the file is **non-portable** and never
+  stored as plaintext.
 
 **Accepted limitation.** The key is derived automatically with no user
 passphrase, so any process running as the same user on the same machine can
@@ -67,6 +68,13 @@ hardware-backed keychain. It exists so that WSL (a primary target, since Windows
 users run Claude Code there) and CI work without per-machine keyring setup. A
 passphrase mode for stronger at-rest protection is tracked in
 [docs/TODO.md](docs/TODO.md).
+
+**Environments with no machine id.** Some containers and minimal images ship
+without `/etc/machine-id`. There the key derivation falls back to a guessable
+value, so the store is **portable** - it could be decrypted off the machine -
+and Cortex emits a one-time warning on stderr. To restore machine binding, set
+`CORTEX_MACHINE_ID` in the server environment to a stable, secret value (e.g. an
+injected platform secret), or use an OS keychain instead of the file backend.
 
 ## PAT handling
 
@@ -105,11 +113,17 @@ passphrase mode for stronger at-rest protection is tracked in
   (first line of defence, at the LLM layer). Behind it, `git_commit_push`
   enforces a **server-side content scan**: it reads the body of every changed
   file and refuses the commit if a high-signal credential pattern matches (AWS
-  keys, private-key blocks, GitLab/GitHub PATs, JWTs, generic `secret = "..."`
-  assignments), reporting the offending `file:line (rule)` without ever echoing
-  the secret value. This backstop holds even if the skill-level gate is skipped,
-  and catches secrets pasted into a file's *text* that a filename check cannot.
-  It is deliberately tuned for low false positives, so it is not exhaustive.
+  access-key IDs and secret keys, Azure storage / Service Bus keys, private-key
+  blocks including encrypted ones, GitLab/GitHub PATs, JWTs, and quoted *or*
+  unquoted `secret = ...` assignments), reporting the offending `file:line
+  (rule)` without ever echoing the secret value. It scans the *text* of changed
+  files: binary blobs are skipped and an oversized file (>5 MiB) is scanned only
+  up to that limit, since the threat is an accidental paste into a small text
+  file, not a secret buried in a large binary - the profile `.gitignore` and the
+  filename gate cover that residue. This backstop holds even if the skill-level
+  gate is skipped, and catches secrets pasted into a file's *text* that a
+  filename check cannot. The ruleset targets common credential shapes and is
+  tuned for low false positives, so it is not exhaustive.
 - **Optional: gitleaks pre-commit hook on the profile repo (extra protection).**
   The built-in content scan is the always-on, zero-dependency baseline. Users who
   want gitleaks' comprehensive ruleset on their *profile* repo can add it as a
@@ -143,7 +157,7 @@ be public.
 
 | Concern | Mitigation |
 |---|---|
-| PAT stolen from disk | OS keychain, or encrypted-file fallback (`0600`, machine-bound) |
+| PAT stolen from disk | OS keychain, or encrypted-file fallback (`0600`, machine-bound via `/etc/machine-id` / `CORTEX_MACHINE_ID`; portable with a warning where neither exists) |
 | PAT in transcript | Documented caveat; rotate; non-transcript entry tracked |
 | Secrets committed to the repo | Server-side content scan in `git_commit_push` (fails closed), filename sync gate, profile `.gitignore`, optional gitleaks pre-commit hook |
 | Token over cleartext / odd transport | HTTPS + PAT only (`https://` scheme enforced, fails closed) |
