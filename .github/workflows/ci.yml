@@ -67,7 +67,7 @@ jobs:
           awk -v t="$total" -v f="$floor" 'BEGIN { exit (t+0 >= f+0) ? 0 : 1 }' || {
             echo "::error::coverage ${total}% is below the ${floor}% floor"; exit 1; }
       - name: upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: mcp/git-server/coverage.out
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -139,7 +139,7 @@ jobs:
         # always(): publish the findings even when the gate above failed, so the
         # alerts show up in the Security tab rather than only in the run log.
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: mcp/git-server/results.sarif
           category: gosec
