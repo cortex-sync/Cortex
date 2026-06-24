@@ -11,6 +11,7 @@ You are syncing the user's Cortex AI profile to their Git repository.
 
 1. Use `git_status` with `repo_path` to check what has changed in the profile repo.
    - If it reports "nothing to commit, working tree clean", report "Profile already up to date - nothing to sync." and stop.
+   - If it errors because `repo_path` does not exist or is not a Git repository (the config block points somewhere the repo was never cloned), do not try to create it here. Tell the user the profile repo is not present at `[repo_path]` and suggest `/restore-profile` to clone it (or correcting the path in the `## Cortex configuration` block), then stop.
 
 2. **Safety gate (do not skip).** `git_commit_push` stages *every* changed and untracked file that is not gitignored - it does not filter. Before committing, inspect the file list from `git_status` and STOP if any path looks sensitive:
    - matches `*.env`, `*.pem`, `*.key`, `*.pfx`, `*secret*`, `*credential*`, `*token*`, `*.tfstate`

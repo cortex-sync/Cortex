@@ -11,9 +11,14 @@ Work through each section below, asking one section at a time. Be conversational
 
 ---
 
-## Section 0 - Existing profile detection
+## Section 0 - Existing profile and repo detection
 
-Before asking anything, check for an existing profile to import:
+Before asking anything, check for two kinds of existing state: an existing
+**profile file** to import, and an existing **profile repo** to adopt.
+
+### Existing profile file
+
+Check for an existing profile to import:
 
 - Claude Code CLI: `~/.claude/CLAUDE.md`
 - Cowork / Claude Desktop: `~/Documents/CLAUDE.md` (on Windows hosts also try
@@ -48,6 +53,26 @@ When importing:
 
 Then continue from Section 7 (Git configuration) and the post-questionnaire steps,
 generating `CLAUDE.md` from the imported-and-confirmed content.
+
+### Existing profile repo
+
+A Cortex repo may already exist - the user could be re-running setup, or setting up a
+machine that points at a repo they already created. Detect this so setup never tries to
+create a repo that is already there:
+
+- **Local:** check whether the intended local path (default `~/cortex-profile`, but
+  confirm the path in Section 7 first) is already a Git repository (a `.git` directory is
+  present, or `git_status` on it succeeds).
+- **Remote:** ask the user directly - "Do you already have a Cortex profile repo on your
+  Git host, or is this a brand-new one?" Do not probe the host (Cortex makes no host API
+  calls).
+
+Record which of these is true and carry it into the post-questionnaire flow, which
+branches on it (**new repo** vs **adopt existing repo**). If the user already has a
+populated remote but no local clone, that is still "adopt existing" - the flow clones it
+first. When adopting, the repo's own files are the source of truth: treat existing
+`memory/` files and `CLAUDE.md` as content to keep, exactly like the import case above -
+do not overwrite them with empty templates.
 
 ---
 
@@ -151,11 +176,26 @@ Store the PAT using `set_credentials` - never write it to a file.
 
 ## After collecting all answers
 
-Decide the local profile repo path first (default: `~/cortex-profile`). All generated files go *into that directory*; `git_init` commits whatever is there.
+Decide the local profile repo path first (default: `~/cortex-profile`). All generated files go *into that directory*.
+
+**This flow has two paths, set by the Section 0 repo detection:**
+- **New repo** (no existing local repo and no existing remote) - the default first-run
+  path: generate the files, create the empty remote, `git_init` to commit and push.
+- **Adopt existing repo** (the local path is already a repo, or the user has a populated
+  remote) - the repo's own files are the source of truth. **Do this preparation step
+  before generating anything:** store the PAT now with `set_credentials` (step 6 brought
+  forward), then make sure the repo is on disk and current - if there is no local clone
+  yet, `git_clone` it; if it is already cloned, `git_pull` to get the latest. Only then
+  generate, and **only fill genuine gaps** - never overwrite an existing `CLAUDE.md` or
+  `memory/`/`adapters/` file with an empty template (same rule as the Section 0 import).
+  Then publish with `git_commit_push`, not `git_init`.
+
+Steps 1-4 generate the profile files (gap-fill only when adopting). Step 5 onward is where
+the two paths differ - each step says which path it applies to.
 
 1. Generate a personalised `CLAUDE.md` (written to `[local_path]/CLAUDE.md`). When
-   importing (Section 0), preserve the user's confirmed content and wording rather
-   than regenerating from the template. Include:
+   importing or adopting an existing repo (Section 0), preserve the user's confirmed
+   content and wording rather than regenerating from the template. Include:
    - Persona section (only if a persona was chosen - omit entirely for "no persona")
    - Personal context (role, stack, timezone)
    - Security rules
@@ -182,14 +222,17 @@ Decide the local profile repo path first (default: `~/cortex-profile`). All gene
 
 4. Write a `.gitignore` into `[local_path]` covering credentials and secrets (`*.env`, `*.pem`, `*.key`, `*secret*`, `*credential*`, `*token*`, `*.tfstate`, etc.). This is the profile repo's last line of defence, since `git_init`/`git_commit_push` stage all non-ignored files. Use `profile-template/.gitignore` as the source.
 
-5. **Create the empty remote repo.** go-git cannot push into a repo that doesn't exist yet, and cannot clone an empty one, so the remote must be created first. Walk the user through it:
+5. **(New repo only) Create the empty remote repo.** go-git cannot push into a repo that doesn't exist yet, and cannot clone an empty one, so the remote must be created first. Walk the user through it:
    - In their host's web UI (GitHub/GitLab/Azure DevOps/...), create a new **private**, **empty** repository (no README, no .gitignore, no licence - it must be truly empty) named as chosen in Section 7.
    - Copy the HTTPS clone URL (e.g. `https://gitlab.com/username/cortex-profile.git`).
    - This manual step is intentional - Cortex does not call host APIs (see design doc). It takes a few seconds and you can guide them through it.
+   - **(Adopt path)** Skip this - the remote already exists. Use the user's existing repo URL.
 
-6. Use `set_credentials` with the `host` (parsed from the URL), `username`, and `token` to store the PAT. Confirm with `get_auth_status`.
+6. Use `set_credentials` with the `host` (parsed from the URL), `username`, and `token` to store the PAT. Confirm with `get_auth_status`. (On the adopt path this was already done in the preparation step before the clone/pull - do not repeat it.)
 
-7. Use `git_init` with `local_path`, `remote_url`, and the message `cortex: initial profile setup`. This initialises the repo (default branch `main`), adds the remote, commits the generated files, and pushes.
+7. Publish the profile - the step that differs by path:
+   - **New repo:** use `git_init` with `local_path`, `remote_url`, and the message `cortex: initial profile setup`. This initialises the repo (default branch `main`), adds the remote, commits the generated files, and pushes.
+   - **Adopt existing repo:** the repo is already cloned and pulled current (preparation step), and the generated files only filled gaps. Run the **safety gate from `sync-profile` step 2** over the `git_status` file list (refuse anything matching `*.env`/`*.pem`/`*.key`/`*secret*`/`*credential*`/`*token*`/`*.tfstate` or any non-text file), then use `git_commit_push` with `local_path` and the message `cortex: adopt existing profile repo`. Do **not** call `git_init` on a populated remote - its initial-commit push is non-fast-forward and will be rejected.
 
 8. Place the profile so the AI tool loads it:
    - Claude Code CLI: copy `CLAUDE.md` from `[local_path]` to `~/.claude/CLAUDE.md`
