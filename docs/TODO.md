@@ -488,6 +488,20 @@ workspace under default `workspace-write` - it decides whether Tier 1 "just work
 mitigations become required setup. **Deferred:** the credential store-key canonicalisation
 bug (see Credential handling above) - pre-existing, own fix + test.
 
+**Open Codex checks (hands-on in a real install):**
+- [ ] **⛔ BLOCKING (pre-ship) - Codex memory-read under the sandbox.** Confirm whether
+      Codex can read the profile repo's `memory/*.md` when it sits **outside** the
+      workspace under the default `workspace-write` sandbox. This is the hinge for Tier 1:
+      if reads work, Tier 1 "just works"; if they are blocked, the documented mitigations
+      (trusted path / launch from the profile dir / inline memory into `AGENTS.md`) become
+      **required setup**, not optional fallbacks - and `adapters/codex.md` + the
+      `restore-profile`/`usage.md` Tier 1 steps must be updated to say so. Cheapest,
+      highest-value check; do it before merging the Codex work for real-world use.
+- [ ] **Tier 2 end-to-end** on a real Codex install with `network_access = true`: does
+      `git_commit_push` via the MCP server actually push, or does the MCP-cancel bug bite?
+- [ ] **Exact `codex mcp add` flags** (env / cwd) on the installed Codex build, before
+      relying on the `install-codex.sh --with-mcp` wiring.
+
 **Refs:** Codex docs (config-reference, mcp, guides/agents-md, skills,
 concepts/sandboxing, agent-approvals-security, hooks, windows); openai/codex#20603
 (SessionEnd request). Plan: `~/.claude/plans/jolly-tumbling-cherny.md`.
