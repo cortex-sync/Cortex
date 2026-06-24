@@ -178,28 +178,38 @@ internal mirror.
       bundles and verify on install; document the env-readability exposure. *(Folds into
       the existing ".mcpb binary is a separate build, not in checksums.txt" known gap -
       close them together.)*
-- [ ] **M10 (medium) - all GitHub Actions pinned by mutable tag, not commit SHA.**
-      `.github/workflows/*` (`checkout@v6`, `setup-go@v6`, `golangci-lint-action@v9`,
-      `codecov-action@v5`, `codeql-action/*@v3`, `goreleaser-action@v7`). Tag-move
-      injection risk, worst in `release.yml` (`contents: write` + tokens). **Fix:** pin
-      every `uses:` to a full 40-char commit SHA (version in a trailing comment);
-      Dependabot already present to bump them.
-- [ ] **M11 (medium) - gitleaks binary downloaded with no integrity verification.**
-      `.github/workflows/ci.yml:176-179`. `curl`'d + `install`'d with no checksum, then
-      run as the secret-scanning gate. **Fix:** pin and verify the tarball SHA-256
-      against a repo-committed value before `tar`/`install` (public GitHub release is
-      fine - just verify it).
-- [ ] **L1 (low) - lefthook installed via `go install ...@latest`.** `Makefile:54`.
-      Moving target for the binary that drives every dev's pre-commit hooks. **Fix:**
-      pin to an explicit tagged version (public GOPROXY is fine for an OSS project) -
+- [x] **(done 2026-06-25, branch `fix/supply-chain-pinning`) M10 (medium) - all GitHub
+      Actions pinned by mutable tag, not commit SHA.** Every `uses:` across
+      `.github/workflows/{ci,release,codeql,e2e}.yml` is now pinned to a full 40-char
+      commit SHA with the resolved version in a trailing comment: `actions/checkout`
+      `df4cb1c` (v6.0.3), `actions/setup-go` `924ae3a` (v6.5.0),
+      `golangci/golangci-lint-action` `82606bf` (v9.2.1), `codecov/codecov-action`
+      `fb8b358` (v7.0.0), `github/codeql-action/{init,analyze,upload-sarif}` `8aad20d`
+      (v4.36.2), `goreleaser/goreleaser-action` `5daf1e9` (v7.2.2). Dependabot already
+      bumps `uses:` so the comments stay current. SHAs resolved via the GitHub API.
+- [x] **(done 2026-06-25, branch `fix/supply-chain-pinning`) M11 (medium) - gitleaks
+      binary downloaded with no integrity verification.** `.github/workflows/ci.yml` -
+      added a `GITLEAKS_SHA256` env (the upstream
+      `gitleaks_8.30.1_checksums.txt` value for `linux_x64.tar.gz`) and a
+      `sha256sum -c -` check between the `curl` and the `tar`/`install`, so a tampered
+      or corrupt tarball fails the job before it runs as the secret-scanning gate. Bump
+      in lockstep with `GITLEAKS_VERSION`.
+- [x] **(done 2026-06-25, branch `fix/supply-chain-pinning`) L1 (low) - lefthook
+      installed via `go install ...@latest`.** Root `Makefile` - added
+      `LEFTHOOK_VERSION := v2.1.9` and pinned the `hooks-install` `go install` to it,
       consistent with the already-pinned golangci-lint/gosec/govulncheck.
-- [ ] **L5 (low) - e2e Gitea image on a mutable Docker Hub tag.** `e2e/Dockerfile:6`
-      (`FROM gitea/gitea:1.26`). The e2e job gates releases, so a re-pushed tag changes
-      release-blocking behaviour. **Fix:** pin by digest (`gitea/gitea@sha256:...`).
-- [ ] **L6 (low) - e2e TLS private key written world-readable (`chmod 644`).**
-      `e2e/gen-certs.sh:36`. Disposable localhost-only self-signed key, minimal impact,
-      but readable by other local users mid-run. **Fix:** prefer `640` with a shared
-      group; ensure `certs/` is gitignored.
+- [x] **(done 2026-06-25, branch `fix/supply-chain-pinning`) L5 (low) - e2e Gitea image
+      on a mutable Docker Hub tag.** `e2e/Dockerfile` - `FROM gitea/gitea:1.26` now pins
+      the manifest digest `@sha256:8e25c717...c1f39` (tag kept for readability), so a
+      re-pushed `1.26` tag can no longer change release-blocking e2e behaviour.
+- [x] **(done 2026-06-25, branch `fix/supply-chain-pinning`) L6 (low) - e2e TLS private
+      key world-readable.** The gitignore half is already satisfied (`e2e/certs/` is in
+      `.gitignore`). The `chmod 644` in `e2e/gen-certs.sh:36` is **deliberately kept** -
+      the in-place comment documents that the unprivileged Gitea container user must read
+      the key through the local bind mount regardless of host UID, and `640`+shared-group
+      is not reliably portable across CI/host UIDs. The key is a disposable localhost-only
+      self-signed cert, so the residual exposure (other local users mid-run) is accepted
+      rather than risk the e2e run.
 
 ## Setup / onboarding UX
 
