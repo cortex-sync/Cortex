@@ -24,8 +24,8 @@ The bottom-right cell is both:
 - a **feature gap** - `setup` can only ever `git_init` a fresh empty remote, so
   it cannot reach this cell; and
 - a **latent data-loss bug** - `restore-profile` clones and *clobbers* the local
-  `CLAUDE.md` with no guard (step 6: "Copy `CLAUDE.md` from the cloned repo to
-  the detected platform path").
+  `CLAUDE.md` with no guard (the "place the profile" step: "Copy `CLAUDE.md` from
+  the cloned repo to the detected platform path").
 
 ## Where the logic belongs
 

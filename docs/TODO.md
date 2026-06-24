@@ -78,6 +78,19 @@ internal mirror.
       confusable origin can make env-token scoping behave inconsistently (compounded
       by C1). **Fix:** normalise both hosts via `golang.org/x/net/idna` before exact
       comparison; reject non-normalisable hosts.
+- [ ] **(found 2026-06-24, adversarial review) Credential store key is byte-exact while
+      resolution canonicalises via `url.Hostname()`.** `set_credentials` stores under the
+      raw `host` arg (`cmd/server/main.go` `setCredentialsHandler` -> `keychain` ->
+      `file_store.go` / `keyring_store.go`, exact-string keyed), but lookups key on
+      `RequireHTTPS` -> `u.Hostname()` (`internal/git/git.go`), which strips the port and
+      does not lowercase. So a `host:port` remote (or a case / trailing-dot mismatch)
+      stores and resolves under different keys -> `ErrNotFound`, breaking the "command-only
+      Codex block just works" guarantee for clone/pull/push/init. Pre-existing (not
+      Codex-only); bounded because github/gitlab use no port. **Fix:** canonicalise the
+      host at the store boundary the same way lookup does (lowercase + trim + strip
+      trailing dot + strip port), or have `set_credentials` accept the remote URL and run
+      it through `RequireHTTPS` so the stored key == the resolve key. Add a regression
+      test. Relates to L4 (env path) - do both as one host-normalisation pass.
 - [ ] *(info, optional)* enforce `0700` on the credentials dir when it pre-exists
       (`internal/keychain/file_store.go:158-161`); add a regression test asserting no
       credential-handler output ever contains the token (PAT-in-logs verified clean
@@ -334,6 +347,176 @@ env-creds server change is exactly the Snyk model. **Real `manifest.json` files 
 `type: "binary"`, so it needs `platform_overrides` per OS (darwin/linux/win32) - or
 per-platform `.mcpb` bundles - with arch (amd64/arm64) via a macOS universal build or a
 wrapper. Add a `tools[]` block for the 8 `cortex-git` tools.
+
+## Codex support
+
+A second AI-tool surface alongside Claude (the "cross-AI portability" goal in
+`docs/design.md` §8). **OpenAI Codex CLI has converged on the same three primitives
+Claude Code uses** - a global instruction file (`AGENTS.md`), stdio MCP servers, and
+`SKILL.md` skills - so this is an *adapter* job, not a rebuild, and **needs no Go server
+change**. Verified 2026-06-24 against the Codex docs + a read of the Cortex credential
+code; full reasoning in the approved plan `~/.claude/plans/jolly-tumbling-cherny.md`.
+
+**Direction: two tiers** - because Codex's *sandbox*, not skills or creds, is the real
+constraint (same shape as the Cowork finding):
+- **Tier 1 (primary): Codex as profile consumer** - `AGENTS.md` + memory as files Codex
+  reads; sync stays host-side (the Claude Code Cortex owns it). No MCP server, no
+  skills-in-Codex, no sandbox dependency. The robust default.
+- **Tier 2 (opt-in): native Cortex in Codex** - `cortex-git` MCP server + skills running
+  inside Codex. Gated on opening the sandbox network (+ a current MCP-cancel bug);
+  documented, not turnkey.
+
+**How Codex maps to Cortex (verified against the Codex docs):**
+- **Instructions:** Codex reads a **global** `~/.codex/AGENTS.md` (and
+  `AGENTS.override.md`) ahead of project-level `AGENTS.md` files, concatenated
+  root-down. Home dir is `~/.codex` (override via `CODEX_HOME`). This is the direct
+  analogue of `~/.claude/CLAUDE.md`. **Caveat:** instruction files are truncated at
+  `project_doc_max_bytes` (**default 32 KiB**) - the full `CLAUDE.md` is too large, so
+  AGENTS.md should be generated from the lean **`adapters/generic.md`**, which exists
+  for exactly this (a non-Claude, portable profile).
+- **MCP:** Codex runs **stdio binary** MCP servers (`[mcp_servers.<id>]` in
+  `~/.codex/config.toml`: `command`/`args`/`env`/`cwd`), best added via `codex mcp add
+  cortex-git -- <launcher>` (it writes the entry). The launcher slots in as `command`.
+  **The block is command-only** - verified in `cmd/server/envcreds.go`: with the PAT in
+  the keychain/file store, the binary resolves creds by the repo's host with no env vars;
+  a partial env (host+username, no token) is ignored (`envCredentials` returns false on
+  an empty token - no store shadow). `CORTEX_GIT_TOKEN` in `config.toml` is a
+  plaintext-on-disk fallback only. **The catch is the sandbox** (see findings below), not
+  the creds.
+- **Skills:** Codex uses the same `SKILL.md` format (YAML frontmatter `name` +
+  `description`, name matches the folder) and **invokes skills implicitly by
+  description match** by default - so `/setup`, `/sync-profile`, `/restore-profile`,
+  `/promote-lessons` fire the same way they do in Claude. **Auto-discovered** from
+  `~/.agents/skills/` (user), `.agents/skills/` (repo), `/etc/codex/skills` (admin);
+  Codex **follows symlinks**. `[[skills.config]]` only *disables* a discovered skill, it
+  is NOT the registration mechanism - so skills install by symlink/copy (the easy part).
+- **Skill bodies are already portable:** they call the git tools by **bare name**
+  (`git_status`, `git_commit_push`, ...) with no `mcp__plugin_cortex_*` prefixes and no
+  `/plugin` framing - which is exactly how Codex surfaces MCP tools. The only
+  Claude-coupling is the hardcoded platform detection in `setup`/`restore-profile`
+  (writes `~/.claude/CLAUDE.md` or `~/Documents/CLAUDE.md`).
+
+**Verified runtime findings (2026-06-24) that shaped the direction:**
+- **Sandbox blocks the network.** Under the default `workspace-write`, network is OFF by
+  default and the sandbox applies to MCP-server subprocesses - so the server's git HTTPS
+  is blocked unless `[sandbox_workspace_write].network_access = true` (+ host allowlist
+  via `features.network_proxy`) or `danger-full-access`. Plus a current bug cancels MCP
+  tool calls under workspace-write/read-only (works under danger-full-access). This is
+  why Tier 1 routes sync host-side.
+- **No SessionEnd hook** (only a per-turn `Stop`; openai/codex#20603 open) -> no
+  auto-sync-on-handoff parity; sync is host-side (Tier 1) or explicit `/sync-profile`
+  (Tier 2).
+- **`codex mcp add`** writes the `config.toml` entry -> no fragile TOML hand-editing.
+- **Codex is native on Windows now** (PowerShell, restricted-token/ACL sandbox) - the
+  POSIX launcher won't run there; point `command` at the release `.exe`.
+- **Skill bodies already portable** - bare tool names (`git_status`...), no
+  `mcp__plugin_*` prefixes, no `/plugin` framing.
+
+**No plugin/marketplace in Codex** - distribution is the `scripts/install-codex.sh`
+bootstrap (does what `/plugin install` does on Claude) + the restore/setup skill branch.
+
+**Sub-tasks for Codex (priority order):**
+(i) ✅ **(done 2026-06-24) Generate the AGENTS.md adapter from `adapters/generic.md`**
+(not the full `CLAUDE.md` - 32 KiB cap), neutralising the Claude-specific lines.
+First artefact lives in Lucas's profile repo at `adapters/codex.md` (follows the
+`gemini.md`/`chatgpt.md`/`generic.md` adapter convention; deploys to
+`~/.codex/AGENTS.md`). Transform applied: dropped the "paste into a system prompt"
+framing (AGENTS.md is auto-loaded), changed `if called "Claude", correct to "Bree"`
+-> any other name, and **added a `## Memory` pointer** so Codex actually reads the
+`memory/` files (`generic.md` had none) - the one deliberate addition beyond a pure
+transform. The product mechanism (a skill that regenerates this adapter, per
+`design.md` §8) is folded into sub-task (ii);
+(ii) ✅ **(done 2026-06-24) Added a Codex branch to `restore-profile` and `setup`.**
+`restore-profile` now has a **Codex CLI wire-up** section: resolve `$CODEX_HOME`
+(default `~/.codex`), copy `adapters/codex.md` -> `$CODEX_HOME/AGENTS.md` (fallback
+`generic.md`), merge a `[mcp_servers.cortex-git]` block into `config.toml` (launcher as
+`command` - it self-resolves root/cache, no Claude env needed), and wire the four
+skills by **symlinking them into `~/.agents/skills/`**, which Codex auto-discovers on
+startup (the skills ship with the distribution, not the profile repo). **Corrected a
+first-pass mistake:** `[[skills.config]]` is NOT the registration mechanism - it is
+optional and only *disables* a discovered skill (`enabled = false`); discovery is purely
+by directory scan (`~/.agents/skills/` user-level, `.agents/skills/` repo-level,
+`/etc/codex/skills` admin), and Codex follows symlinks. So **skills are the easy part of
+Codex support** (drop/symlink files, no installer); the MCP binary is the fiddly part
+(no auto-fetch, launcher path + Windows gap). `setup` now also generates `adapters/codex.md`
+(step 3) and places it for Codex (step 8, delegating to the restore wire-up).
+**Credential-handling decision (deviates from this item's original "PAT via env"
+wording):** the PAT is **NOT** inlined into `config.toml`. The launcher execs the
+binary, which reads creds from the keychain / encrypted-file store that `set_credentials`
+already populated - single source of truth, no plaintext token on disk, consistent with
+"never PATs in files". The `config.toml` block is **command-only** (no `env`); a full
+`CORTEX_GIT_HOST`/`_USERNAME`/`_TOKEN` env triple is documented as a fallback **only**
+when the store is unavailable, with a plaintext-on-disk warning. Both skills instruct
+**merge, don't clobber** existing `config.toml`, and to restart Codex after editing it;
+(iii) ✅ **(done 2026-06-24)** `sync-profile` now finds the `## Cortex configuration`
+repo path from `AGENTS.md` (`$CODEX_HOME/AGENTS.md`) as well as `CLAUDE.md`.
+(iv) ✅ **(done 2026-06-24, docs)** Native-Windows Codex can't run the POSIX launcher;
+`docs/usage.md` documents pointing `command` at the `cortex-git-server.exe` (from the
+`.mcpb`/release). *Future enhancement:* a native PowerShell launcher with first-run
+download + SHA-256 verify (own branch + test, mirroring `test-launcher.sh`).
+(v) ✅ **(verified - resolved)** Codex has **no SessionEnd hook** (only a per-turn
+`Stop`; openai/codex#20603). Not a blocker - Tier 1 syncs host-side, Tier 2 runs
+`/sync-profile` explicitly. A `codex` shell wrapper that syncs on exit is a later nicety.
+(vi) ✅ **(verified - the key finding)** Under the default `workspace-write` sandbox
+Codex **blocks the MCP server's outbound network** (and a current bug cancels MCP calls);
+Tier 2 needs `network_access = true` (+ host allowlist) or `danger-full-access`. Memory
+*reads* of a profile repo outside the workspace may also be blocked under Tier 1 -
+mitigations documented in `usage.md` / `restore-profile`. **Open hands-on checks:** Tier
+2 end-to-end push under `network_access=true`, and exact `codex mcp add` env/cwd flags on
+the installed build.
+(vii) ✅ **(done 2026-06-24) `scripts/install-codex.sh`** - the host bootstrap (what
+`/plugin install` does on Claude): `--profile-dir DIR` places `AGENTS.md` (Tier 1);
+`--with-mcp` symlinks the 4 skills into `~/.agents/skills/` and runs `codex mcp add`
+(Tier 2), printing the sandbox-network prerequisite. Idempotent; never touches the
+profile git state or creds. Smoke-tested (placement, backup-on-conflict, symlink
+idempotency, codex-absent fallback).
+(viii) ✅ **(done 2026-06-24)** `docs/usage.md` has a `## Codex CLI` section (Tier 1 /
+Tier 2 / Windows).
+
+**Post-review follow-ups (adversarial multi-agent review, 2026-06-24 - 6 dimensions, 40
+findings survived verification, 0 critical/high).** Fixes applied on branch
+`feat/codex-support`: reworded the Tier 1 "sandbox-independent" **overclaim** (it is
+*network*-independent, but memory reads depend on the *filesystem* sandbox); added an
+explicit Tier 1 `git clone` step (a Codex-only box had no documented way to obtain the
+repo); **demoted `danger-full-access`** to a last-resort with a whole-sandbox warning (was
+offered co-equal and as the MCP-bug workaround); marked the MCP-cancel bug version-specific
+(`0.125.0-alpha.3`, maybe fixed); `install-codex.sh` no longer writes through a symlinked
+`AGENTS.md` (backs up / replaces the link, refuses a dir dest, guards unset `HOME`);
+`setup` now honours `CODEX_HOME`; documented the plaintext-token exposure (`/proc/PID/environ`,
+not `0600`). **Top pre-ship check** = the Codex memory-read question (the ⛔ blocking item
+below). **Deferred:** the credential store-key canonicalisation bug (see Credential handling
+above) - pre-existing, own fix + test.
+
+**Second review (2026-06-24, PR #23 code-review workflow - 5 lenses, 33 findings verified,
+0 critical/high; prior fixes confirmed landed). Fixes applied (commit `fix(codex)` #2):**
+`install-codex.sh` now (a) backs up a genuine user `AGENTS.md` **once** so a changed-adapter
+re-run can't clobber the original backup, (b) appends the `## Cortex configuration` block
+(repo path + remote/host) so `sync-profile` and the memory pointer resolve the repo - closing
+the gap where the script placed an `AGENTS.md` with no block, (c) adds `--uninstall` (removes
+the skill symlinks + MCP entry, restores `AGENTS.md` from backup), (d) `grep -qw` for the
+MCP-registered check; the **Tier 1 clone is now token-safe** (no PAT in URL, prompt entry,
+warn re `store` helper, MCP `git_clone` as the sanctioned alternative); Tier 2 step-lettering
+collision fixed; the **secret-scan-skipped-on-Tier-1** caveat is documented (by design - Tier 1
+is host-side git). Remaining low/by-design: native Windows launcher (already a future item
+above); the secret-scan caveat is documented, not closed.
+
+**Open Codex checks (hands-on in a real install):**
+- [ ] **⛔ BLOCKING (pre-ship) - Codex memory-read under the sandbox.** Confirm whether
+      Codex can read the profile repo's `memory/*.md` when it sits **outside** the
+      workspace under the default `workspace-write` sandbox. This is the hinge for Tier 1:
+      if reads work, Tier 1 "just works"; if they are blocked, the documented mitigations
+      (trusted path / launch from the profile dir / inline memory into `AGENTS.md`) become
+      **required setup**, not optional fallbacks - and `adapters/codex.md` + the
+      `restore-profile`/`usage.md` Tier 1 steps must be updated to say so. Cheapest,
+      highest-value check; do it before merging the Codex work for real-world use.
+- [ ] **Tier 2 end-to-end** on a real Codex install with `network_access = true`: does
+      `git_commit_push` via the MCP server actually push, or does the MCP-cancel bug bite?
+- [ ] **Exact `codex mcp add` flags** (env / cwd) on the installed Codex build, before
+      relying on the `install-codex.sh --with-mcp` wiring.
+
+**Refs:** Codex docs (config-reference, mcp, guides/agents-md, skills,
+concepts/sandboxing, agent-approvals-security, hooks, windows); openai/codex#20603
+(SessionEnd request). Plan: `~/.claude/plans/jolly-tumbling-cherny.md`.
 
 ## Publishing / install
 

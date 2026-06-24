@@ -170,6 +170,15 @@ Decide the local profile repo path first (default: `~/cortex-profile`). All gene
 
 3. Generate platform adapters under `[local_path]/adapters/`:
    - `generic.md` - plain text version of the profile for non-Claude tools
+   - `codex.md` - the `AGENTS.md` rendering for Codex CLI. Derive it from `generic.md`:
+     drop the "paste into a system prompt" framing (Codex auto-loads `AGENTS.md`),
+     neutralise any persona-name correction line (e.g. `if called "Claude"` becomes
+     "if addressed by any other name"), and add a short `## Memory` section that points
+     at the `memory/` files **in the profile repo whose path is in the `## Cortex
+     configuration` block** (that block is appended to `AGENTS.md` at install time by
+     `restore-profile` / `install-codex.sh` - do not hardcode a machine-specific path in
+     this committed adapter). Keep it lean - Codex truncates the instruction file at
+     ~32 KiB. Deploys to `~/.codex/AGENTS.md`.
 
 4. Write a `.gitignore` into `[local_path]` covering credentials and secrets (`*.env`, `*.pem`, `*.key`, `*secret*`, `*credential*`, `*token*`, `*.tfstate`, etc.). This is the profile repo's last line of defence, since `git_init`/`git_commit_push` stage all non-ignored files. Use `profile-template/.gitignore` as the source.
 
@@ -182,12 +191,19 @@ Decide the local profile repo path first (default: `~/cortex-profile`). All gene
 
 7. Use `git_init` with `local_path`, `remote_url`, and the message `cortex: initial profile setup`. This initialises the repo (default branch `main`), adds the remote, commits the generated files, and pushes.
 
-8. Copy `CLAUDE.md` from `[local_path]` to the correct platform path so the harness loads it:
-   - Cowork: `~/Documents/CLAUDE.md`
-   - Claude Code CLI: `~/.claude/CLAUDE.md`
+8. Place the profile so the AI tool loads it:
+   - Claude Code CLI: copy `CLAUDE.md` from `[local_path]` to `~/.claude/CLAUDE.md`
+   - Cowork: copy `CLAUDE.md` to `~/Documents/CLAUDE.md`
+   - Codex CLI: place `adapters/codex.md` as `$CODEX_HOME/AGENTS.md` (default
+     `~/.codex/AGENTS.md`) (Tier 1 - profile consumer, sync stays host-side). For full
+     native Cortex in Codex (Tier 2), also
+     add the `cortex-git` MCP server and symlink the skills into `~/.agents/skills/` -
+     follow the **Codex CLI wire-up** tiers in the `restore-profile` skill (Tier 2
+     requires opening Codex's sandbox network; credentials are already stored from
+     Section 7, so `config.toml` carries no token).
 
-   If a `CLAUDE.md` already exists at the destination, confirm before overwriting -
-   even when it was the Section 0 import source (the user should know the original
-   is being replaced by the generated profile).
+   If a `CLAUDE.md`/`AGENTS.md` already exists at the destination, confirm before
+   overwriting - even when it was the Section 0 import source (the user should know the
+   original is being replaced by the generated profile).
 
 9. Report: "Cortex is set up. Your profile is live at [repo_url] and CLAUDE.md is in place at [path]. Future sessions will start with your full context."

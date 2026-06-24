@@ -32,8 +32,10 @@ You are syncing the user's Cortex AI profile to their Git repository.
 
 ## Configuration
 
-The profile repo path is stored in the user's CLAUDE.md under `## Cortex configuration`.
-If not found, ask the user for the path and suggest they add it to their CLAUDE.md.
+The profile repo path is stored in the user's instruction file under `## Cortex configuration`:
+`CLAUDE.md` on Claude (`~/.claude/CLAUDE.md` or `~/Documents/CLAUDE.md`), or `AGENTS.md` on
+Codex (`$CODEX_HOME/AGENTS.md`, default `~/.codex/AGENTS.md`). Check whichever applies to the
+current tool. If not found, ask the user for the path and suggest they add the block to that file.
 
 ## Error handling
 
