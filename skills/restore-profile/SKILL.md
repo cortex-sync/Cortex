@@ -19,9 +19,12 @@ You are restoring the user's Cortex AI profile to this device from their Git rep
 
 3. Confirm with `get_auth_status` for that host before proceeding - it should report the credentials and the active backend. If it does not, stop and re-check the inputs.
 
-4. Use `git_clone` with `remote_url` and `local_path` to clone the repo. Credentials are resolved automatically from the store using the host parsed from the URL.
+4. Get the repo onto disk at `local_path`. **First check whether `local_path` already exists**, because `git_clone` (go-git `PlainClone`) fails if the directory is already a repo or is non-empty:
+   - **Empty or absent** - use `git_clone` with `remote_url` and `local_path`. Credentials are resolved automatically from the store using the host parsed from the URL.
+   - **Already a clone of this repo** (a `.git` is present and its origin matches `remote_url`) - do not clone. Run `git_pull` instead to bring it current, and tell the user you reused the existing clone. Note `git_pull` is last-write-wins (force-updates local) - warn first if they have substantial uncommitted local changes.
+   - **Exists but is a different repo, or a non-empty non-repo directory** - stop and ask. Offer a different `local_path` or, if they are sure it is the right repo with local edits, confirm before any pull. Never clobber an unrelated directory.
 
-5. Detect the target AI tool and place the profile. Ask the user to confirm if unsure.
+5. Detect the target AI tool and place the profile. Ask the user to confirm if unsure. **If an instruction file already exists at the destination, confirm before overwriting it** - the user should know their current `CLAUDE.md`/`AGENTS.md` is being replaced by the synced copy (this matches the `setup` and Codex Tier 1 behaviour).
 
    - **Claude Code CLI** - copy `CLAUDE.md` from the cloned repo to `~/.claude/CLAUDE.md`.
    - **Cowork / Claude Desktop** - copy `CLAUDE.md` to `~/Documents/CLAUDE.md` (the connected Documents folder).
