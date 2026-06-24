@@ -335,6 +335,135 @@ env-creds server change is exactly the Snyk model. **Real `manifest.json` files 
 per-platform `.mcpb` bundles - with arch (amd64/arm64) via a macOS universal build or a
 wrapper. Add a `tools[]` block for the 8 `cortex-git` tools.
 
+## Codex support
+
+A second AI-tool surface alongside Claude (the "cross-AI portability" goal in
+`docs/design.md` §8). **OpenAI Codex CLI has converged on the same three primitives
+Claude Code uses** - a global instruction file (`AGENTS.md`), stdio MCP servers, and
+`SKILL.md` skills - so this is an *adapter* job, not a rebuild, and **needs no Go server
+change**. Verified 2026-06-24 against the Codex docs + a read of the Cortex credential
+code; full reasoning in the approved plan `~/.claude/plans/jolly-tumbling-cherny.md`.
+
+**Direction: two tiers** - because Codex's *sandbox*, not skills or creds, is the real
+constraint (same shape as the Cowork finding):
+- **Tier 1 (primary): Codex as profile consumer** - `AGENTS.md` + memory as files Codex
+  reads; sync stays host-side (the Claude Code Cortex owns it). No MCP server, no
+  skills-in-Codex, no sandbox dependency. The robust default.
+- **Tier 2 (opt-in): native Cortex in Codex** - `cortex-git` MCP server + skills running
+  inside Codex. Gated on opening the sandbox network (+ a current MCP-cancel bug);
+  documented, not turnkey.
+
+**How Codex maps to Cortex (verified against the Codex docs):**
+- **Instructions:** Codex reads a **global** `~/.codex/AGENTS.md` (and
+  `AGENTS.override.md`) ahead of project-level `AGENTS.md` files, concatenated
+  root-down. Home dir is `~/.codex` (override via `CODEX_HOME`). This is the direct
+  analogue of `~/.claude/CLAUDE.md`. **Caveat:** instruction files are truncated at
+  `project_doc_max_bytes` (**default 32 KiB**) - the full `CLAUDE.md` is too large, so
+  AGENTS.md should be generated from the lean **`adapters/generic.md`**, which exists
+  for exactly this (a non-Claude, portable profile).
+- **MCP:** Codex runs **stdio binary** MCP servers (`[mcp_servers.<id>]` in
+  `~/.codex/config.toml`: `command`/`args`/`env`/`cwd`), best added via `codex mcp add
+  cortex-git -- <launcher>` (it writes the entry). The launcher slots in as `command`.
+  **The block is command-only** - verified in `cmd/server/envcreds.go`: with the PAT in
+  the keychain/file store, the binary resolves creds by the repo's host with no env vars;
+  a partial env (host+username, no token) is ignored (`envCredentials` returns false on
+  an empty token - no store shadow). `CORTEX_GIT_TOKEN` in `config.toml` is a
+  plaintext-on-disk fallback only. **The catch is the sandbox** (see findings below), not
+  the creds.
+- **Skills:** Codex uses the same `SKILL.md` format (YAML frontmatter `name` +
+  `description`, name matches the folder) and **invokes skills implicitly by
+  description match** by default - so `/setup`, `/sync-profile`, `/restore-profile`,
+  `/promote-lessons` fire the same way they do in Claude. **Auto-discovered** from
+  `~/.agents/skills/` (user), `.agents/skills/` (repo), `/etc/codex/skills` (admin);
+  Codex **follows symlinks**. `[[skills.config]]` only *disables* a discovered skill, it
+  is NOT the registration mechanism - so skills install by symlink/copy (the easy part).
+- **Skill bodies are already portable:** they call the git tools by **bare name**
+  (`git_status`, `git_commit_push`, ...) with no `mcp__plugin_cortex_*` prefixes and no
+  `/plugin` framing - which is exactly how Codex surfaces MCP tools. The only
+  Claude-coupling is the hardcoded platform detection in `setup`/`restore-profile`
+  (writes `~/.claude/CLAUDE.md` or `~/Documents/CLAUDE.md`).
+
+**Verified runtime findings (2026-06-24) that shaped the direction:**
+- **Sandbox blocks the network.** Under the default `workspace-write`, network is OFF by
+  default and the sandbox applies to MCP-server subprocesses - so the server's git HTTPS
+  is blocked unless `[sandbox_workspace_write].network_access = true` (+ host allowlist
+  via `features.network_proxy`) or `danger-full-access`. Plus a current bug cancels MCP
+  tool calls under workspace-write/read-only (works under danger-full-access). This is
+  why Tier 1 routes sync host-side.
+- **No SessionEnd hook** (only a per-turn `Stop`; openai/codex#20603 open) -> no
+  auto-sync-on-handoff parity; sync is host-side (Tier 1) or explicit `/sync-profile`
+  (Tier 2).
+- **`codex mcp add`** writes the `config.toml` entry -> no fragile TOML hand-editing.
+- **Codex is native on Windows now** (PowerShell, restricted-token/ACL sandbox) - the
+  POSIX launcher won't run there; point `command` at the release `.exe`.
+- **Skill bodies already portable** - bare tool names (`git_status`...), no
+  `mcp__plugin_*` prefixes, no `/plugin` framing.
+
+**No plugin/marketplace in Codex** - distribution is the `scripts/install-codex.sh`
+bootstrap (does what `/plugin install` does on Claude) + the restore/setup skill branch.
+
+**Sub-tasks for Codex (priority order):**
+(i) ✅ **(done 2026-06-24) Generate the AGENTS.md adapter from `adapters/generic.md`**
+(not the full `CLAUDE.md` - 32 KiB cap), neutralising the Claude-specific lines.
+First artefact lives in Lucas's profile repo at `adapters/codex.md` (follows the
+`gemini.md`/`chatgpt.md`/`generic.md` adapter convention; deploys to
+`~/.codex/AGENTS.md`). Transform applied: dropped the "paste into a system prompt"
+framing (AGENTS.md is auto-loaded), changed `if called "Claude", correct to "Bree"`
+-> any other name, and **added a `## Memory` pointer** so Codex actually reads the
+`memory/` files (`generic.md` had none) - the one deliberate addition beyond a pure
+transform. The product mechanism (a skill that regenerates this adapter, per
+`design.md` §8) is folded into sub-task (ii);
+(ii) ✅ **(done 2026-06-24) Added a Codex branch to `restore-profile` and `setup`.**
+`restore-profile` now has a **Codex CLI wire-up** section: resolve `$CODEX_HOME`
+(default `~/.codex`), copy `adapters/codex.md` -> `$CODEX_HOME/AGENTS.md` (fallback
+`generic.md`), merge a `[mcp_servers.cortex-git]` block into `config.toml` (launcher as
+`command` - it self-resolves root/cache, no Claude env needed), and wire the four
+skills by **symlinking them into `~/.agents/skills/`**, which Codex auto-discovers on
+startup (the skills ship with the distribution, not the profile repo). **Corrected a
+first-pass mistake:** `[[skills.config]]` is NOT the registration mechanism - it is
+optional and only *disables* a discovered skill (`enabled = false`); discovery is purely
+by directory scan (`~/.agents/skills/` user-level, `.agents/skills/` repo-level,
+`/etc/codex/skills` admin), and Codex follows symlinks. So **skills are the easy part of
+Codex support** (drop/symlink files, no installer); the MCP binary is the fiddly part
+(no auto-fetch, launcher path + Windows gap). `setup` now also generates `adapters/codex.md`
+(step 3) and places it for Codex (step 8, delegating to the restore wire-up).
+**Credential-handling decision (deviates from this item's original "PAT via env"
+wording):** the PAT is **NOT** inlined into `config.toml`. The launcher execs the
+binary, which reads creds from the keychain / encrypted-file store that `set_credentials`
+already populated - single source of truth, no plaintext token on disk, consistent with
+"never PATs in files". `config.toml` carries only `CORTEX_GIT_HOST`/`_USERNAME` to scope
+the lookup; `CORTEX_GIT_TOKEN` is documented as a fallback **only** when the store is
+unavailable, with a plaintext-on-disk warning. Both skills instruct **merge, don't
+clobber** existing `config.toml`, and to restart Codex after editing it;
+(iii) ✅ **(done 2026-06-24)** `sync-profile` now finds the `## Cortex configuration`
+repo path from `AGENTS.md` (`$CODEX_HOME/AGENTS.md`) as well as `CLAUDE.md`.
+(iv) ✅ **(done 2026-06-24, docs)** Native-Windows Codex can't run the POSIX launcher;
+`docs/usage.md` documents pointing `command` at the `cortex-git-server.exe` (from the
+`.mcpb`/release). *Future enhancement:* a native PowerShell launcher with first-run
+download + SHA-256 verify (own branch + test, mirroring `test-launcher.sh`).
+(v) ✅ **(verified - resolved)** Codex has **no SessionEnd hook** (only a per-turn
+`Stop`; openai/codex#20603). Not a blocker - Tier 1 syncs host-side, Tier 2 runs
+`/sync-profile` explicitly. A `codex` shell wrapper that syncs on exit is a later nicety.
+(vi) ✅ **(verified - the key finding)** Under the default `workspace-write` sandbox
+Codex **blocks the MCP server's outbound network** (and a current bug cancels MCP calls);
+Tier 2 needs `network_access = true` (+ host allowlist) or `danger-full-access`. Memory
+*reads* of a profile repo outside the workspace may also be blocked under Tier 1 -
+mitigations documented in `usage.md` / `restore-profile`. **Open hands-on checks:** Tier
+2 end-to-end push under `network_access=true`, and exact `codex mcp add` env/cwd flags on
+the installed build.
+(vii) ✅ **(done 2026-06-24) `scripts/install-codex.sh`** - the host bootstrap (what
+`/plugin install` does on Claude): `--profile-dir DIR` places `AGENTS.md` (Tier 1);
+`--with-mcp` symlinks the 4 skills into `~/.agents/skills/` and runs `codex mcp add`
+(Tier 2), printing the sandbox-network prerequisite. Idempotent; never touches the
+profile git state or creds. Smoke-tested (placement, backup-on-conflict, symlink
+idempotency, codex-absent fallback).
+(viii) ✅ **(done 2026-06-24)** `docs/usage.md` has a `## Codex CLI` section (Tier 1 /
+Tier 2 / Windows).
+
+**Refs:** Codex docs (config-reference, mcp, guides/agents-md, skills,
+concepts/sandboxing, agent-approvals-security, hooks, windows); openai/codex#20603
+(SessionEnd request). Plan: `~/.claude/plans/jolly-tumbling-cherny.md`.
+
 ## Publishing / install
 
 - [x] Shipped in **v0.1.0**: binary launcher (fetch + SHA-256 verify into

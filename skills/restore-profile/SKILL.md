@@ -1,6 +1,6 @@
 ---
 name: restore-profile
-description: Restore the Cortex profile on a new device. Clones the profile repo and places CLAUDE.md and memory files in the correct locations for the current platform.
+description: Restore the Cortex profile on a new device. Clones the profile repo and places the instruction file (CLAUDE.md for Claude, AGENTS.md for Codex) and memory files in the correct locations for the current AI tool.
 ---
 
 # Restore Cortex profile on a new device
@@ -21,16 +21,13 @@ You are restoring the user's Cortex AI profile to this device from their Git rep
 
 4. Use `git_clone` with `remote_url` and `local_path` to clone the repo. Credentials are resolved automatically from the store using the host parsed from the URL.
 
-5. Detect the current platform:
-   - If running in Cowork with a connected Documents folder: write `CLAUDE.md` to `~/Documents/CLAUDE.md`
-   - If running in Claude Code CLI: write `CLAUDE.md` to `~/.claude/CLAUDE.md`
-   - Ask the user to confirm the path if unsure.
+5. Detect the target AI tool and place the profile. Ask the user to confirm if unsure.
 
-6. Copy `CLAUDE.md` from the cloned repo to the detected platform path.
+   - **Claude Code CLI** - copy `CLAUDE.md` from the cloned repo to `~/.claude/CLAUDE.md`.
+   - **Cowork / Claude Desktop** - copy `CLAUDE.md` to `~/Documents/CLAUDE.md` (the connected Documents folder).
+   - **Codex CLI** - Codex uses a different instruction file (`AGENTS.md`) and has two setup tiers. Follow the **Codex CLI wire-up** below instead of copying `CLAUDE.md`.
 
-7. Report success: profile restored, CLAUDE.md placed at `[path]`, memory files available at `[repo_path]/memory/`.
-
-8. Add the following block to the restored CLAUDE.md if not already present:
+6. For **Claude Code CLI / Cowork**, add the following block to the `CLAUDE.md` you just placed, if not already present (this is how `sync-profile` later finds the repo). The Codex wire-up below adds the equivalent block to `AGENTS.md`.
 
 ```
 ## Cortex configuration
@@ -40,8 +37,66 @@ You are restoring the user's Cortex AI profile to this device from their Git rep
 - Host: [host]
 ```
 
+7. Report success: profile restored, the instruction file placed at `[path]`, and memory files available at `[repo_path]/memory/`. For Codex Tier 2, also report the MCP server and skills wired up.
+
+## Codex CLI wire-up
+
+Codex uses a global instruction file (`AGENTS.md`), can run stdio MCP servers, and auto-discovers `SKILL.md` skills. There are **two ways to run Cortex on Codex** - pick based on how much you want Codex to do itself. Steps 1-4 above (clone via the `cortex-git` tools) need the MCP server, so run this restore from **Claude Code** (or use `scripts/install-codex.sh` plus a manual clone) - then place the result onto Codex below.
+
+Resolve the Codex home directory first: `$CODEX_HOME` if set, otherwise `~/.codex`. Create it if missing.
+
+### Tier 1 - profile consumer (recommended)
+
+Codex reads your persona, working style, and memory; **sync stays host-side** (run `sync-profile` from Claude Code, or `scripts/install-codex.sh`). No MCP server and no skills run inside Codex, so there is nothing for Codex's sandbox to block. This is the robust default.
+
+a. **Instruction file.** Copy `adapters/codex.md` from the cloned repo to `$CODEX_HOME/AGENTS.md` (fall back to `adapters/generic.md` if `codex.md` is absent). Lean by design, for Codex's instruction-file size limit (`project_doc_max_bytes`, default 32 KiB). If `AGENTS.md` already exists, confirm before overwriting.
+
+b. **Memory.** `AGENTS.md` points Codex at the profile repo's `memory/` directory. Confirm Codex can read it: under the default `workspace-write` sandbox, reads of a profile repo *outside* the workspace may be blocked - either add the profile path to Codex's trusted/allowed paths, launch Codex from within the profile directory, or (last resort) inline the key memory into `AGENTS.md` within the size cap.
+
+c. **Cortex config block.** Add the `## Cortex configuration` block (step 6) to `AGENTS.md` so a later in-Codex sync (Tier 2) can find the repo. Harmless under Tier 1.
+
+That is all for Tier 1 - sync happens host-side and Codex re-reads the files each session.
+
+### Tier 2 - native Cortex in Codex (advanced, opt-in)
+
+Run `cortex-git` as an MCP server and the skills inside Codex, so `/sync-profile` etc. work natively. **Prerequisite - do this first or nothing works:** the server makes outbound HTTPS to your Git host, and Codex blocks network by default under `workspace-write`. Open it:
+
+```toml
+[sandbox_workspace_write]
+network_access = true
+```
+
+(and allowlist your Git host if you use `features.network_proxy`), or run Codex with `danger-full-access`. Heads-up: current Codex builds have a known bug that cancels MCP tool calls under `workspace-write`/`read-only` ("user cancelled MCP tool call"); if you hit it, `danger-full-access` is the workaround. If you do not want to open the sandbox, stay on Tier 1.
+
+d. **MCP server.** Easiest is the Codex CLI, which writes the `config.toml` entry for you:
+
+   ```sh
+   codex mcp add cortex-git -- <absolute path to bin/cortex-git-launch.sh in the Cortex checkout>
+   ```
+
+   Or add it by hand to `$CODEX_HOME/config.toml` (merge, do not clobber - only add if `[mcp_servers.cortex-git]` is absent):
+
+   ```toml
+   [mcp_servers.cortex-git]
+   command = "<absolute path to bin/cortex-git-launch.sh>"
+   ```
+
+   **No `env` and no token are needed.** The launcher self-resolves its install root and binary cache, and the binary reads the PAT from the keychain / encrypted-file store that step 2 populated, keyed by the repo's host - single source of truth, no plaintext token on disk. *(Only if the credential store is genuinely unavailable on this machine should you add `env = { CORTEX_GIT_HOST = "[host]", CORTEX_GIT_USERNAME = "[username]", CORTEX_GIT_TOKEN = "[token]" }` - the token is then plaintext on disk, readable by any process running as this user. A partial env without the token does nothing: the binary ignores it and uses the store.)*
+
+e. **Skills.** Codex auto-discovers skills from `~/.agents/skills/` on startup (the `[[skills.config]]` table is only for *disabling* a discovered skill via `enabled = false`). The skills ship with the Cortex distribution, **not** the profile repo - locate the Cortex `skills/` directory (ask for the Cortex checkout/plugin path if unclear) and symlink each folder in (Codex follows symlinks, so a `git pull` in the checkout keeps them current):
+
+   ```sh
+   mkdir -p ~/.agents/skills
+   ln -sfn <cortex>/skills/setup           ~/.agents/skills/setup
+   ln -sfn <cortex>/skills/sync-profile    ~/.agents/skills/sync-profile
+   ln -sfn <cortex>/skills/restore-profile ~/.agents/skills/restore-profile
+   ln -sfn <cortex>/skills/promote-lessons ~/.agents/skills/promote-lessons
+   ```
+
+   Copying works too. Keep folder names matching each skill's `name:` frontmatter; rename on collision. Restart Codex to pick up newly discovered skills. `scripts/install-codex.sh` automates steps d and e.
+
 ## Notes
 
-- The profile repo itself is the source of truth. CLAUDE.md on disk is a synced working copy.
-- After restoring, the sync-profile skill will keep everything up to date automatically on handoff.
-- Never store PATs in files - they must go to the OS keychain via `set_credentials`.
+- The profile repo itself is the source of truth. The on-disk instruction file (`CLAUDE.md` or `AGENTS.md`) is a synced working copy.
+- On Claude, sync-profile runs automatically on handoff. **Codex has no session-end hook**, so under Tier 1 sync is host-side and under Tier 2 it is run explicitly (`/sync-profile`).
+- Never store PATs in files - they go to the OS keychain via `set_credentials`. The Codex `config.toml` deliberately carries no token for the same reason (the binary reads the store).
