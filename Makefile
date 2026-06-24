@@ -1,5 +1,9 @@
 .PHONY: fmt lint validate build build-all clean hooks-install release-dry-run licenses e2e mcpb mcpb-all mcpb-check test-launcher
 
+# Pin the tool that drives every dev's pre-commit hooks, rather than tracking a
+# moving @latest (consistent with the pinned golangci-lint/gosec/govulncheck).
+LEFTHOOK_VERSION := v2.1.9
+
 fmt:
 	cd mcp/git-server && make fmt
 
@@ -51,7 +55,7 @@ test-launcher:
 	bash scripts/test-launcher.sh
 
 hooks-install:
-	@which lefthook > /dev/null || (echo "Installing lefthook..." && go install github.com/evilmartians/lefthook@latest)
+	@which lefthook > /dev/null || (echo "Installing lefthook $(LEFTHOOK_VERSION)..." && go install github.com/evilmartians/lefthook@$(LEFTHOOK_VERSION))
 	$(shell go env GOPATH)/bin/lefthook install
 	@echo "Pre-commit hooks installed"
 
