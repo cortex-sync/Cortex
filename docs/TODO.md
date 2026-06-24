@@ -483,10 +483,22 @@ offered co-equal and as the MCP-bug workaround); marked the MCP-cancel bug versi
 (`0.125.0-alpha.3`, maybe fixed); `install-codex.sh` no longer writes through a symlinked
 `AGENTS.md` (backs up / replaces the link, refuses a dir dest, guards unset `HOME`);
 `setup` now honours `CODEX_HOME`; documented the plaintext-token exposure (`/proc/PID/environ`,
-not `0600`). **TOP PRE-SHIP CHECK:** verify whether Codex can read `memory/` *outside* the
-workspace under default `workspace-write` - it decides whether Tier 1 "just works" or the
-mitigations become required setup. **Deferred:** the credential store-key canonicalisation
-bug (see Credential handling above) - pre-existing, own fix + test.
+not `0600`). **Top pre-ship check** = the Codex memory-read question (the ⛔ blocking item
+below). **Deferred:** the credential store-key canonicalisation bug (see Credential handling
+above) - pre-existing, own fix + test.
+
+**Second review (2026-06-24, PR #23 code-review workflow - 5 lenses, 33 findings verified,
+0 critical/high; prior fixes confirmed landed). Fixes applied (commit `fix(codex)` #2):**
+`install-codex.sh` now (a) backs up a genuine user `AGENTS.md` **once** so a changed-adapter
+re-run can't clobber the original backup, (b) appends the `## Cortex configuration` block
+(repo path + remote/host) so `sync-profile` and the memory pointer resolve the repo - closing
+the gap where the script placed an `AGENTS.md` with no block, (c) adds `--uninstall` (removes
+the skill symlinks + MCP entry, restores `AGENTS.md` from backup), (d) `grep -qw` for the
+MCP-registered check; the **Tier 1 clone is now token-safe** (no PAT in URL, prompt entry,
+warn re `store` helper, MCP `git_clone` as the sanctioned alternative); Tier 2 step-lettering
+collision fixed; the **secret-scan-skipped-on-Tier-1** caveat is documented (by design - Tier 1
+is host-side git). Remaining low/by-design: native Windows launcher (already a future item
+above); the secret-scan caveat is documented, not closed.
 
 **Open Codex checks (hands-on in a real install):**
 - [ ] **⛔ BLOCKING (pre-ship) - Codex memory-read under the sandbox.** Confirm whether

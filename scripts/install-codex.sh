@@ -32,15 +32,20 @@ launcher="$root/bin/cortex-git-launch.sh"
 
 profile_dir=""
 with_mcp=0
+uninstall=0
 
 usage() {
 	cat <<EOF
-Usage: install-codex.sh [--profile-dir DIR] [--with-mcp]
+Usage: install-codex.sh [--profile-dir DIR] [--with-mcp] [--uninstall]
 
   --profile-dir DIR   Tier 1: copy DIR/adapters/codex.md (or generic.md) to
-                      $codex_home/AGENTS.md so Codex loads your profile.
+                      $codex_home/AGENTS.md (with a '## Cortex configuration'
+                      block) so Codex loads your profile.
   --with-mcp          Tier 2: register the cortex-git MCP server and symlink the
                       Cortex skills into ~/.agents/skills.
+  --uninstall         Reverse what this script created: remove the Cortex skill
+                      symlinks and the cortex-git MCP entry, and restore AGENTS.md
+                      from backup if one exists.
   -h, --help          Show this help.
 
 With no options nothing is changed. Tier 1 and Tier 2 can be combined.
@@ -58,6 +63,10 @@ while [ $# -gt 0 ]; do
 		with_mcp=1
 		shift
 		;;
+	--uninstall)
+		uninstall=1
+		shift
+		;;
 	-h | --help)
 		usage
 		exit 0
@@ -70,8 +79,37 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+# --- Uninstall (exclusive) ----------------------------------------------------
+if [ "$uninstall" -eq 1 ]; then
+	agents_skills_dir="${HOME:?install-codex: HOME must be set}/.agents/skills"
+	for s in $skills; do
+		link="$agents_skills_dir/$s"
+		# Only remove a symlink that points into THIS checkout's skills/.
+		if [ -L "$link" ] && [ "$(readlink "$link" 2>/dev/null)" = "$root/skills/$s" ]; then
+			rm -f "$link"
+			echo "install-codex: removed skill symlink $link"
+		fi
+	done
+	if command -v codex >/dev/null 2>&1; then
+		if codex mcp remove cortex-git >/dev/null 2>&1; then
+			echo "install-codex: removed MCP server 'cortex-git'"
+		else
+			echo "install-codex: no 'cortex-git' MCP server to remove"
+		fi
+	fi
+	dest="$codex_home/AGENTS.md"
+	if [ -e "$dest.cortex-bak" ]; then
+		mv "$dest.cortex-bak" "$dest"
+		echo "install-codex: restored original AGENTS.md from backup"
+	elif [ -e "$dest" ]; then
+		echo "install-codex: left $dest in place (no backup to restore) - remove it by hand if unwanted" >&2
+	fi
+	echo "install-codex: uninstall done."
+	exit 0
+fi
+
 if [ -z "$profile_dir" ] && [ "$with_mcp" -eq 0 ]; then
-	echo "install-codex: nothing to do - pass --profile-dir DIR and/or --with-mcp." >&2
+	echo "install-codex: nothing to do - pass --profile-dir DIR, --with-mcp, or --uninstall." >&2
 	echo >&2
 	usage >&2
 	exit 2
@@ -91,17 +129,40 @@ if [ -n "$profile_dir" ]; then
 		echo "install-codex: $dest is a directory - refusing to overwrite" >&2
 		exit 1
 	fi
+	# Back up a genuine user-authored AGENTS.md exactly once: skip if a backup
+	# already exists, or if the file is already Cortex-managed (carries our block),
+	# so a re-run with a changed adapter can't clobber the original backup.
+	backup_existing() {
+		[ -e "$dest.cortex-bak" ] && return 0
+		grep -q '^## Cortex configuration' "$1" 2>/dev/null && return 0
+		cp "$1" "$dest.cortex-bak"
+		echo "install-codex: backed up existing AGENTS.md to $dest.cortex-bak"
+	}
 	if [ -L "$dest" ]; then
 		# Replace the symlink itself - never write through it and clobber an
-		# unrelated target living outside $codex_home.
+		# unrelated target outside $codex_home. Back up the target's content first.
 		echo "install-codex: $dest is a symlink - replacing the link, not its target" >&2
+		[ -e "$dest" ] && backup_existing "$dest"
 		rm -f "$dest"
-	elif [ -e "$dest" ] && ! cmp -s "$src" "$dest"; then
-		cp "$dest" "$dest.cortex-bak"
-		echo "install-codex: backed up existing AGENTS.md to $dest.cortex-bak"
+	elif [ -e "$dest" ]; then
+		backup_existing "$dest"
 	fi
 	cp "$src" "$dest"
-	echo "install-codex: placed $(basename "$src") -> $dest"
+	# Append the Cortex configuration block so sync-profile and the AGENTS.md memory
+	# pointer can resolve the profile repo. It is per-machine (a local path), so it
+	# lives in the on-disk AGENTS.md, not in the committed adapter.
+	if ! grep -q '^## Cortex configuration' "$dest"; then
+		abs_profile="$(CDPATH= cd -- "$profile_dir" && pwd)"
+		remote="$(git -C "$profile_dir" remote get-url origin 2>/dev/null || true)"
+		{
+			printf '\n## Cortex configuration\n\n- Profile repo path: %s\n' "$abs_profile"
+			if [ -n "$remote" ]; then
+				host="$(printf '%s' "$remote" | sed -e 's#^[a-z][a-z]*://##' -e 's#.*@##' -e 's#[:/].*##')"
+				printf -- '- Remote: %s\n- Host: %s\n' "$remote" "$host"
+			fi
+		} >>"$dest"
+	fi
+	echo "install-codex: placed $(basename "$src") -> $dest (+ Cortex configuration block)"
 fi
 
 # --- Tier 2: skills + MCP server ----------------------------------------------
@@ -126,14 +187,17 @@ if [ "$with_mcp" -eq 1 ]; then
 
 	# MCP server: prefer the Codex CLI, which writes the config.toml entry itself.
 	if command -v codex >/dev/null 2>&1; then
-		if codex mcp list 2>/dev/null | grep -q "cortex-git"; then
+		# -w avoids a bare substring match; the exact `codex mcp list` format should
+		# be confirmed against the installed build (see docs/TODO.md open checks).
+		if codex mcp list 2>/dev/null | grep -qw "cortex-git"; then
 			echo "install-codex: MCP server 'cortex-git' already registered - leaving it"
 		else
 			codex mcp add cortex-git -- "$launcher"
 			echo "install-codex: registered MCP server 'cortex-git' (command: $launcher)"
 		fi
 	else
-		echo "install-codex: 'codex' not on PATH - add the server by hand to $codex_home/config.toml:" >&2
+		echo "install-codex: 'codex' not on PATH - add the server by hand to $codex_home/config.toml" >&2
+		echo "  (merge into any existing config; only add if [mcp_servers.cortex-git] is absent):" >&2
 		echo >&2
 		echo "  [mcp_servers.cortex-git]" >&2
 		echo "  command = \"$launcher\"" >&2

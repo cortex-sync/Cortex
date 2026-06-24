@@ -49,13 +49,13 @@ Resolve the Codex home directory first: `$CODEX_HOME` if set, otherwise `~/.code
 
 Codex reads your persona, working style, and memory; **sync stays host-side** (run `sync-profile` from Claude Code, or `scripts/install-codex.sh`). No MCP server and no skills run inside Codex, so there is **no network dependency**. Note it is *not* fully sandbox-independent: memory reading depends on Codex's filesystem sandbox (step c) - verify that first, it is the cheapest, highest-value check.
 
-a. **Get the profile repo on disk.** If steps 1-4 (Claude Code) already cloned it, skip this. On a Codex-only machine with no Claude Code, clone it directly with a plain `git clone <remote_url> <local_path>` (use your PAT for HTTPS auth). Tier 1 only needs the files locally - it does **not** need the cortex-git MCP server.
+a. **Get the profile repo on disk - without persisting your PAT.** If steps 1-4 (Claude Code) already cloned it, skip this. On a Codex-only machine, clone it but **do not embed the token in the URL**: run `git clone https://<host>/<owner>/<repo>.git <local_path>` and enter the PAT at the password prompt. Do **not** use `https://user:token@host/...` - git writes that verbatim into `.git/config` and it lands in shell history. Also make sure no `store` credential helper is active, or the prompt-entered PAT gets cached to disk. (If the `cortex-git` server is available, the sanctioned alternative is `set_credentials` + `git_clone`, which keeps the PAT only in the credential store.) Tier 1 needs only the files locally - it does **not** otherwise need the MCP server.
 
 b. **Instruction file.** Copy `adapters/codex.md` from the repo to `$CODEX_HOME/AGENTS.md` (fall back to `adapters/generic.md` if `codex.md` is absent). Lean by design, for Codex's instruction-file size limit (`project_doc_max_bytes`, default 32 KiB). If `AGENTS.md` already exists, confirm before overwriting.
 
-c. **Memory - verify this, it is Tier 1's load-bearing assumption.** `AGENTS.md` points Codex at the profile repo's `memory/` directory, which is usually **outside** Codex's workspace. Under the default `workspace-write` sandbox those reads may be blocked - so confirm Codex can actually read the files. If it cannot, one of these becomes **required** (not an optional fallback): add the profile path to Codex's trusted/allowed paths, launch Codex from within the profile directory, or inline the key memory into `AGENTS.md` within the size cap.
+c. **Memory - verify this, it is Tier 1's load-bearing assumption.** `AGENTS.md` points Codex at the profile repo's `memory/` directory (via the repo path in the `## Cortex configuration` block, step d), which is usually **outside** Codex's workspace. Under the default `workspace-write` sandbox those reads may be blocked - so confirm Codex can actually read the files. If it cannot, one of these becomes **required** (not an optional fallback): add the profile path to Codex's trusted/allowed paths, launch Codex from within the profile directory, or inline the key memory into `AGENTS.md` within the size cap.
 
-d. **Cortex config block.** Add the `## Cortex configuration` block (step 6) to `AGENTS.md` so a later in-Codex sync (Tier 2) can find the repo. Harmless under Tier 1.
+d. **Cortex config block.** Add the `## Cortex configuration` block (step 6) to `AGENTS.md` - it carries the profile repo path that the memory pointer (step c) and a later in-Codex `sync-profile` (Tier 2) resolve against. `scripts/install-codex.sh --profile-dir` appends this block for you.
 
 That is all for Tier 1 - sync happens host-side and Codex re-reads the files each session.
 
@@ -70,7 +70,7 @@ network_access = true
 
 `danger-full-access` also works but **disables the entire sandbox** - all filesystem-write and network confinement, for every command Codex runs in that session, not just the cortex-git server. Treat it as a session-scoped last resort, not the default. Heads-up: some Codex builds had a bug that cancelled MCP tool calls under `workspace-write`/`read-only` ("user cancelled MCP tool call") - reported on `0.125.0-alpha.3` and may already be fixed, so check whether your build is affected. If it is, **prefer staying on Tier 1** (host-side sync); reach for `danger-full-access` only as a temporary workaround. If you do not want to open the sandbox at all, stay on Tier 1.
 
-d. **MCP server.** Easiest is the Codex CLI, which writes the `config.toml` entry for you:
+a. **MCP server.** Easiest is the Codex CLI, which writes the `config.toml` entry for you:
 
    ```sh
    codex mcp add cortex-git -- <absolute path to bin/cortex-git-launch.sh in the Cortex checkout>
@@ -87,7 +87,7 @@ d. **MCP server.** Easiest is the Codex CLI, which writes the `config.toml` entr
 
    On **native Windows** the POSIX launcher won't run - point `command` at the `cortex-git-server.exe` (from the `.mcpb` bundle or the GitHub release) instead. See `docs/usage.md` (Codex CLI > Windows).
 
-e. **Skills.** Codex auto-discovers skills from `~/.agents/skills/` on startup (the `[[skills.config]]` table is only for *disabling* a discovered skill via `enabled = false`). The skills ship with the Cortex distribution, **not** the profile repo - locate the Cortex `skills/` directory (ask for the Cortex checkout/plugin path if unclear) and symlink each folder in (Codex follows symlinks, so a `git pull` in the checkout keeps them current):
+b. **Skills.** Codex auto-discovers skills from `~/.agents/skills/` on startup (the `[[skills.config]]` table is only for *disabling* a discovered skill via `enabled = false`). The skills ship with the Cortex distribution, **not** the profile repo - locate the Cortex `skills/` directory (ask for the Cortex checkout/plugin path if unclear) and symlink each folder in (Codex follows symlinks, so a `git pull` in the checkout keeps them current):
 
    ```sh
    mkdir -p ~/.agents/skills
@@ -97,10 +97,11 @@ e. **Skills.** Codex auto-discovers skills from `~/.agents/skills/` on startup (
    ln -sfn <cortex>/skills/promote-lessons ~/.agents/skills/promote-lessons
    ```
 
-   Copying works too. Keep folder names matching each skill's `name:` frontmatter; rename on collision. Restart Codex to pick up newly discovered skills. `scripts/install-codex.sh` automates steps d and e.
+   Copying works too. Keep folder names matching each skill's `name:` frontmatter; rename on collision. Restart Codex to pick up newly discovered skills. `scripts/install-codex.sh --with-mcp` automates this Tier 2 wire-up (both steps above).
 
 ## Notes
 
 - The profile repo itself is the source of truth. The on-disk instruction file (`CLAUDE.md` or `AGENTS.md`) is a synced working copy.
 - On Claude, sync-profile runs automatically on handoff. **Codex has no session-end hook**, so under Tier 1 sync is host-side and under Tier 2 it is run explicitly (`/sync-profile`).
 - Never store PATs in files - they go to the OS keychain via `set_credentials`. The Codex `config.toml` deliberately carries no token for the same reason (the binary reads the store).
+- **Secret-scan caveat:** the `cortex-git` content scan that blocks committing a secret only runs on the server's `git_commit_push` path (Tier 2, or any Claude-side sync). A Tier 1 host-side `git push` does **not** go through it, so the usual filename safety gate and your own care are the only checks - prefer syncing via Claude Code (or Tier 2) for the scan.

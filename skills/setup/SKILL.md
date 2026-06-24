@@ -173,8 +173,11 @@ Decide the local profile repo path first (default: `~/cortex-profile`). All gene
    - `codex.md` - the `AGENTS.md` rendering for Codex CLI. Derive it from `generic.md`:
      drop the "paste into a system prompt" framing (Codex auto-loads `AGENTS.md`),
      neutralise any persona-name correction line (e.g. `if called "Claude"` becomes
-     "if addressed by any other name"), and add a short `## Memory` section pointing
-     at the `memory/` files. Keep it lean - Codex truncates the instruction file at
+     "if addressed by any other name"), and add a short `## Memory` section that points
+     at the `memory/` files **in the profile repo whose path is in the `## Cortex
+     configuration` block** (that block is appended to `AGENTS.md` at install time by
+     `restore-profile` / `install-codex.sh` - do not hardcode a machine-specific path in
+     this committed adapter). Keep it lean - Codex truncates the instruction file at
      ~32 KiB. Deploys to `~/.codex/AGENTS.md`.
 
 4. Write a `.gitignore` into `[local_path]` covering credentials and secrets (`*.env`, `*.pem`, `*.key`, `*secret*`, `*credential*`, `*token*`, `*.tfstate`, etc.). This is the profile repo's last line of defence, since `git_init`/`git_commit_push` stage all non-ignored files. Use `profile-template/.gitignore` as the source.
