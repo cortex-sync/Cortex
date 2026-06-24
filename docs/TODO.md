@@ -78,6 +78,19 @@ internal mirror.
       confusable origin can make env-token scoping behave inconsistently (compounded
       by C1). **Fix:** normalise both hosts via `golang.org/x/net/idna` before exact
       comparison; reject non-normalisable hosts.
+- [ ] **(found 2026-06-24, adversarial review) Credential store key is byte-exact while
+      resolution canonicalises via `url.Hostname()`.** `set_credentials` stores under the
+      raw `host` arg (`cmd/server/main.go` `setCredentialsHandler` -> `keychain` ->
+      `file_store.go` / `keyring_store.go`, exact-string keyed), but lookups key on
+      `RequireHTTPS` -> `u.Hostname()` (`internal/git/git.go`), which strips the port and
+      does not lowercase. So a `host:port` remote (or a case / trailing-dot mismatch)
+      stores and resolves under different keys -> `ErrNotFound`, breaking the "command-only
+      Codex block just works" guarantee for clone/pull/push/init. Pre-existing (not
+      Codex-only); bounded because github/gitlab use no port. **Fix:** canonicalise the
+      host at the store boundary the same way lookup does (lowercase + trim + strip
+      trailing dot + strip port), or have `set_credentials` accept the remote URL and run
+      it through `RequireHTTPS` so the stored key == the resolve key. Add a regression
+      test. Relates to L4 (env path) - do both as one host-normalisation pass.
 - [ ] *(info, optional)* enforce `0700` on the credentials dir when it pre-exists
       (`internal/keychain/file_store.go:158-161`); add a regression test asserting no
       credential-handler output ever contains the token (PAT-in-logs verified clean
@@ -431,10 +444,10 @@ Codex support** (drop/symlink files, no installer); the MCP binary is the fiddly
 wording):** the PAT is **NOT** inlined into `config.toml`. The launcher execs the
 binary, which reads creds from the keychain / encrypted-file store that `set_credentials`
 already populated - single source of truth, no plaintext token on disk, consistent with
-"never PATs in files". `config.toml` carries only `CORTEX_GIT_HOST`/`_USERNAME` to scope
-the lookup; `CORTEX_GIT_TOKEN` is documented as a fallback **only** when the store is
-unavailable, with a plaintext-on-disk warning. Both skills instruct **merge, don't
-clobber** existing `config.toml`, and to restart Codex after editing it;
+"never PATs in files". The `config.toml` block is **command-only** (no `env`); a full
+`CORTEX_GIT_HOST`/`_USERNAME`/`_TOKEN` env triple is documented as a fallback **only**
+when the store is unavailable, with a plaintext-on-disk warning. Both skills instruct
+**merge, don't clobber** existing `config.toml`, and to restart Codex after editing it;
 (iii) ✅ **(done 2026-06-24)** `sync-profile` now finds the `## Cortex configuration`
 repo path from `AGENTS.md` (`$CODEX_HOME/AGENTS.md`) as well as `CLAUDE.md`.
 (iv) ✅ **(done 2026-06-24, docs)** Native-Windows Codex can't run the POSIX launcher;
@@ -459,6 +472,21 @@ profile git state or creds. Smoke-tested (placement, backup-on-conflict, symlink
 idempotency, codex-absent fallback).
 (viii) ✅ **(done 2026-06-24)** `docs/usage.md` has a `## Codex CLI` section (Tier 1 /
 Tier 2 / Windows).
+
+**Post-review follow-ups (adversarial multi-agent review, 2026-06-24 - 6 dimensions, 40
+findings survived verification, 0 critical/high).** Fixes applied on branch
+`feat/codex-support`: reworded the Tier 1 "sandbox-independent" **overclaim** (it is
+*network*-independent, but memory reads depend on the *filesystem* sandbox); added an
+explicit Tier 1 `git clone` step (a Codex-only box had no documented way to obtain the
+repo); **demoted `danger-full-access`** to a last-resort with a whole-sandbox warning (was
+offered co-equal and as the MCP-bug workaround); marked the MCP-cancel bug version-specific
+(`0.125.0-alpha.3`, maybe fixed); `install-codex.sh` no longer writes through a symlinked
+`AGENTS.md` (backs up / replaces the link, refuses a dir dest, guards unset `HOME`);
+`setup` now honours `CODEX_HOME`; documented the plaintext-token exposure (`/proc/PID/environ`,
+not `0600`). **TOP PRE-SHIP CHECK:** verify whether Codex can read `memory/` *outside* the
+workspace under default `workspace-write` - it decides whether Tier 1 "just works" or the
+mitigations become required setup. **Deferred:** the credential store-key canonicalisation
+bug (see Credential handling above) - pre-existing, own fix + test.
 
 **Refs:** Codex docs (config-reference, mcp, guides/agents-md, skills,
 concepts/sandboxing, agent-approvals-security, hooks, windows); openai/codex#20603

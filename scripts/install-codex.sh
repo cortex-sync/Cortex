@@ -25,7 +25,6 @@ set -eu
 
 skills="setup sync-profile restore-profile promote-lessons"
 codex_home="${CODEX_HOME:-$HOME/.codex}"
-agents_skills_dir="$HOME/.agents/skills"
 
 # Cortex checkout root: this script lives in <root>/scripts/.
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
@@ -41,7 +40,7 @@ Usage: install-codex.sh [--profile-dir DIR] [--with-mcp]
   --profile-dir DIR   Tier 1: copy DIR/adapters/codex.md (or generic.md) to
                       $codex_home/AGENTS.md so Codex loads your profile.
   --with-mcp          Tier 2: register the cortex-git MCP server and symlink the
-                      Cortex skills into $agents_skills_dir.
+                      Cortex skills into ~/.agents/skills.
   -h, --help          Show this help.
 
 With no options nothing is changed. Tier 1 and Tier 2 can be combined.
@@ -88,7 +87,16 @@ if [ -n "$profile_dir" ]; then
 	fi
 	mkdir -p "$codex_home"
 	dest="$codex_home/AGENTS.md"
-	if [ -e "$dest" ] && ! cmp -s "$src" "$dest"; then
+	if [ -d "$dest" ]; then
+		echo "install-codex: $dest is a directory - refusing to overwrite" >&2
+		exit 1
+	fi
+	if [ -L "$dest" ]; then
+		# Replace the symlink itself - never write through it and clobber an
+		# unrelated target living outside $codex_home.
+		echo "install-codex: $dest is a symlink - replacing the link, not its target" >&2
+		rm -f "$dest"
+	elif [ -e "$dest" ] && ! cmp -s "$src" "$dest"; then
 		cp "$dest" "$dest.cortex-bak"
 		echo "install-codex: backed up existing AGENTS.md to $dest.cortex-bak"
 	fi
@@ -99,6 +107,7 @@ fi
 # --- Tier 2: skills + MCP server ----------------------------------------------
 if [ "$with_mcp" -eq 1 ]; then
 	# Skills: symlink each folder so Codex auto-discovers it (Codex follows symlinks).
+	agents_skills_dir="${HOME:?install-codex: HOME must be set for --with-mcp}/.agents/skills"
 	mkdir -p "$agents_skills_dir"
 	for s in $skills; do
 		target="$root/skills/$s"
@@ -146,6 +155,8 @@ if [ "$with_mcp" -eq 1 ]; then
 	echo "        [sandbox_workspace_write]"
 	echo "        network_access = true"
 	echo
-	echo "    (and allowlist your Git host if you use features.network_proxy), or run Codex"
-	echo "    with danger-full-access. Then restart Codex and run /restore-profile or /sync-profile."
+	echo "    (allowlist just your Git host if you use features.network_proxy). This is the"
+	echo "    least-privilege option; danger-full-access also works but disables the WHOLE"
+	echo "    sandbox - use it only as a session-scoped last resort. Then restart Codex and"
+	echo "    run /restore-profile or /sync-profile."
 fi

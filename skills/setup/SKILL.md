@@ -191,8 +191,9 @@ Decide the local profile repo path first (default: `~/cortex-profile`). All gene
 8. Place the profile so the AI tool loads it:
    - Claude Code CLI: copy `CLAUDE.md` from `[local_path]` to `~/.claude/CLAUDE.md`
    - Cowork: copy `CLAUDE.md` to `~/Documents/CLAUDE.md`
-   - Codex CLI: place `adapters/codex.md` as `~/.codex/AGENTS.md` (Tier 1 - profile
-     consumer, sync stays host-side). For full native Cortex in Codex (Tier 2), also
+   - Codex CLI: place `adapters/codex.md` as `$CODEX_HOME/AGENTS.md` (default
+     `~/.codex/AGENTS.md`) (Tier 1 - profile consumer, sync stays host-side). For full
+     native Cortex in Codex (Tier 2), also
      add the `cortex-git` MCP server and symlink the skills into `~/.agents/skills/` -
      follow the **Codex CLI wire-up** tiers in the `restore-profile` skill (Tier 2
      requires opening Codex's sandbox network; credentials are already stored from

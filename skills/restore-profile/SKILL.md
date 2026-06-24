@@ -47,26 +47,28 @@ Resolve the Codex home directory first: `$CODEX_HOME` if set, otherwise `~/.code
 
 ### Tier 1 - profile consumer (recommended)
 
-Codex reads your persona, working style, and memory; **sync stays host-side** (run `sync-profile` from Claude Code, or `scripts/install-codex.sh`). No MCP server and no skills run inside Codex, so there is nothing for Codex's sandbox to block. This is the robust default.
+Codex reads your persona, working style, and memory; **sync stays host-side** (run `sync-profile` from Claude Code, or `scripts/install-codex.sh`). No MCP server and no skills run inside Codex, so there is **no network dependency**. Note it is *not* fully sandbox-independent: memory reading depends on Codex's filesystem sandbox (step c) - verify that first, it is the cheapest, highest-value check.
 
-a. **Instruction file.** Copy `adapters/codex.md` from the cloned repo to `$CODEX_HOME/AGENTS.md` (fall back to `adapters/generic.md` if `codex.md` is absent). Lean by design, for Codex's instruction-file size limit (`project_doc_max_bytes`, default 32 KiB). If `AGENTS.md` already exists, confirm before overwriting.
+a. **Get the profile repo on disk.** If steps 1-4 (Claude Code) already cloned it, skip this. On a Codex-only machine with no Claude Code, clone it directly with a plain `git clone <remote_url> <local_path>` (use your PAT for HTTPS auth). Tier 1 only needs the files locally - it does **not** need the cortex-git MCP server.
 
-b. **Memory.** `AGENTS.md` points Codex at the profile repo's `memory/` directory. Confirm Codex can read it: under the default `workspace-write` sandbox, reads of a profile repo *outside* the workspace may be blocked - either add the profile path to Codex's trusted/allowed paths, launch Codex from within the profile directory, or (last resort) inline the key memory into `AGENTS.md` within the size cap.
+b. **Instruction file.** Copy `adapters/codex.md` from the repo to `$CODEX_HOME/AGENTS.md` (fall back to `adapters/generic.md` if `codex.md` is absent). Lean by design, for Codex's instruction-file size limit (`project_doc_max_bytes`, default 32 KiB). If `AGENTS.md` already exists, confirm before overwriting.
 
-c. **Cortex config block.** Add the `## Cortex configuration` block (step 6) to `AGENTS.md` so a later in-Codex sync (Tier 2) can find the repo. Harmless under Tier 1.
+c. **Memory - verify this, it is Tier 1's load-bearing assumption.** `AGENTS.md` points Codex at the profile repo's `memory/` directory, which is usually **outside** Codex's workspace. Under the default `workspace-write` sandbox those reads may be blocked - so confirm Codex can actually read the files. If it cannot, one of these becomes **required** (not an optional fallback): add the profile path to Codex's trusted/allowed paths, launch Codex from within the profile directory, or inline the key memory into `AGENTS.md` within the size cap.
+
+d. **Cortex config block.** Add the `## Cortex configuration` block (step 6) to `AGENTS.md` so a later in-Codex sync (Tier 2) can find the repo. Harmless under Tier 1.
 
 That is all for Tier 1 - sync happens host-side and Codex re-reads the files each session.
 
 ### Tier 2 - native Cortex in Codex (advanced, opt-in)
 
-Run `cortex-git` as an MCP server and the skills inside Codex, so `/sync-profile` etc. work natively. **Prerequisite - do this first or nothing works:** the server makes outbound HTTPS to your Git host, and Codex blocks network by default under `workspace-write`. Open it:
+Run `cortex-git` as an MCP server and the skills inside Codex, so `/sync-profile` etc. work natively. **Prerequisite - do this first or nothing works:** the server makes outbound HTTPS to your Git host, and Codex blocks network by default under `workspace-write`. The **preferred, least-privilege** fix is to allow network for the workspace (and allowlist just your Git host if you use `features.network_proxy`):
 
 ```toml
 [sandbox_workspace_write]
 network_access = true
 ```
 
-(and allowlist your Git host if you use `features.network_proxy`), or run Codex with `danger-full-access`. Heads-up: current Codex builds have a known bug that cancels MCP tool calls under `workspace-write`/`read-only` ("user cancelled MCP tool call"); if you hit it, `danger-full-access` is the workaround. If you do not want to open the sandbox, stay on Tier 1.
+`danger-full-access` also works but **disables the entire sandbox** - all filesystem-write and network confinement, for every command Codex runs in that session, not just the cortex-git server. Treat it as a session-scoped last resort, not the default. Heads-up: some Codex builds had a bug that cancelled MCP tool calls under `workspace-write`/`read-only` ("user cancelled MCP tool call") - reported on `0.125.0-alpha.3` and may already be fixed, so check whether your build is affected. If it is, **prefer staying on Tier 1** (host-side sync); reach for `danger-full-access` only as a temporary workaround. If you do not want to open the sandbox at all, stay on Tier 1.
 
 d. **MCP server.** Easiest is the Codex CLI, which writes the `config.toml` entry for you:
 
@@ -81,7 +83,9 @@ d. **MCP server.** Easiest is the Codex CLI, which writes the `config.toml` entr
    command = "<absolute path to bin/cortex-git-launch.sh>"
    ```
 
-   **No `env` and no token are needed.** The launcher self-resolves its install root and binary cache, and the binary reads the PAT from the keychain / encrypted-file store that step 2 populated, keyed by the repo's host - single source of truth, no plaintext token on disk. *(Only if the credential store is genuinely unavailable on this machine should you add `env = { CORTEX_GIT_HOST = "[host]", CORTEX_GIT_USERNAME = "[username]", CORTEX_GIT_TOKEN = "[token]" }` - the token is then plaintext on disk, readable by any process running as this user. A partial env without the token does nothing: the binary ignores it and uses the store.)*
+   **No `env` and no token are needed.** The launcher self-resolves its install root and binary cache, and the binary reads the PAT from the keychain / encrypted-file store that step 2 populated, keyed by the repo's host - single source of truth, no plaintext token on disk. *(Only if the credential store is genuinely unavailable on this machine should you add `env = { CORTEX_GIT_HOST = "[host]", CORTEX_GIT_USERNAME = "[username]", CORTEX_GIT_TOKEN = "[token]" }`. The token is then plaintext on disk - `config.toml` is **not** mode `0600`, and the value is also exposed via `/proc/PID/environ` to any process running as this user. Set `CORTEX_GIT_HOST` to exactly the repo's hostname (lowercase, no port) or the host-scoped lookup will miss. A partial env without the token does nothing: the binary ignores it and uses the store.)*
+
+   On **native Windows** the POSIX launcher won't run - point `command` at the `cortex-git-server.exe` (from the `.mcpb` bundle or the GitHub release) instead. See `docs/usage.md` (Codex CLI > Windows).
 
 e. **Skills.** Codex auto-discovers skills from `~/.agents/skills/` on startup (the `[[skills.config]]` table is only for *disabling* a discovered skill via `enabled = false`). The skills ship with the Cortex distribution, **not** the profile repo - locate the Cortex `skills/` directory (ask for the Cortex checkout/plugin path if unclear) and symlink each folder in (Codex follows symlinks, so a `git pull` in the checkout keeps them current):
 

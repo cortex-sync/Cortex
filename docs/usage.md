@@ -111,9 +111,12 @@ step via `scripts/install-codex.sh`. There are two tiers.
 
 Codex loads your persona, working style, and memory; **sync stays host-side** (keep
 running `/sync-profile` from Claude Code). No MCP server and no skills run inside Codex,
-so nothing depends on Codex's sandbox. This is the robust default.
+so there is **no network dependency**. (Memory reading still depends on Codex's
+*filesystem* sandbox - see the note below; verify it first.) This is the robust default.
 
-From a Cortex checkout, with your profile repo already cloned (e.g. `~/cortex-profile`):
+You need your profile repo on disk. If it is not already cloned (e.g. from Claude Code),
+clone it with a plain `git clone <remote_url> ~/cortex-profile` (PAT for HTTPS auth) -
+Tier 1 needs only the files, not the MCP server. Then, from a Cortex checkout:
 
 ```shell
 ./scripts/install-codex.sh --profile-dir ~/cortex-profile
@@ -140,21 +143,27 @@ Run the `cortex-git` server and the Cortex skills *inside* Codex, so `/sync-prof
 
 `--with-mcp` registers the server (`codex mcp add cortex-git -- .../bin/cortex-git-launch.sh`)
 and symlinks the four skills into `~/.agents/skills/`, where Codex auto-discovers them.
-Your PAT stays in the credential store - it is **not** written into `config.toml`.
+Your PAT stays in the credential store - it is **not** written into `config.toml`. (If you
+ever must fall back to a token in `config.toml`, note it is plaintext there: `config.toml`
+is not mode `0600`, and the value is also visible via `/proc/PID/environ`.)
 
-**Prerequisite - open the sandbox network.** The server makes outbound HTTPS to your Git
-host, and Codex blocks network by default under `workspace-write`. In `~/.codex/config.toml`:
+**Prerequisite - allow the network (least privilege).** The server makes outbound HTTPS to
+your Git host, and Codex blocks network by default under `workspace-write`. The preferred
+fix scopes the change to the workspace. In `~/.codex/config.toml`:
 
 ```toml
 [sandbox_workspace_write]
 network_access = true
 ```
 
-(allowlist your Git host too if you use `features.network_proxy`), or run Codex with
-`danger-full-access`. Current Codex builds also have a known bug that cancels MCP tool
-calls under `workspace-write`/`read-only` ("user cancelled MCP tool call"); if you hit
-it, `danger-full-access` is the workaround. If you'd rather not open the sandbox, stay on
-Tier 1 and sync host-side.
+(allowlist just your Git host too if you use `features.network_proxy`). **`danger-full-access`
+also works but disables the *entire* sandbox** - all filesystem-write and network confinement,
+for every command in the session - so treat it as a session-scoped last resort, not the
+default. Some Codex builds also had a bug that cancelled MCP tool calls under
+`workspace-write`/`read-only` ("user cancelled MCP tool call") - reported on `0.125.0-alpha.3`
+and may already be fixed; check your build. If you hit it, prefer staying on Tier 1
+(host-side sync) over reaching for `danger-full-access`. If you'd rather not open the sandbox
+at all, stay on Tier 1.
 
 ### Windows
 
