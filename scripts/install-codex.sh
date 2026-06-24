@@ -25,6 +25,10 @@ set -eu
 
 skills="setup sync-profile restore-profile promote-lessons"
 codex_home="${CODEX_HOME:-$HOME/.codex}"
+# Machine marker flagging an AGENTS.md as Cortex-managed (for backup/uninstall
+# decisions) - distinct from the human-readable '## Cortex configuration' heading,
+# which a user might legitimately type themselves.
+cortex_marker='<!-- cortex:managed do-not-edit (managed by install-codex.sh) -->'
 
 # Cortex checkout root: this script lives in <root>/scripts/.
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
@@ -81,6 +85,9 @@ done
 
 # --- Uninstall (exclusive) ----------------------------------------------------
 if [ "$uninstall" -eq 1 ]; then
+	if [ -n "$profile_dir" ] || [ "$with_mcp" -eq 1 ]; then
+		echo "install-codex: --uninstall ignores --profile-dir/--with-mcp" >&2
+	fi
 	agents_skills_dir="${HOME:?install-codex: HOME must be set}/.agents/skills"
 	for s in $skills; do
 		link="$agents_skills_dir/$s"
@@ -99,10 +106,19 @@ if [ "$uninstall" -eq 1 ]; then
 	fi
 	dest="$codex_home/AGENTS.md"
 	if [ -e "$dest.cortex-bak" ]; then
+		# A genuine original exists. If the user has since replaced the managed file
+		# with their own content, preserve that before restoring the backup.
+		if [ -e "$dest" ] && ! grep -qF 'cortex:managed' "$dest" 2>/dev/null; then
+			cp "$dest" "$dest.cortex-pre-uninstall"
+			echo "install-codex: current AGENTS.md is not Cortex-managed; saved it to $dest.cortex-pre-uninstall before restoring" >&2
+		fi
 		mv "$dest.cortex-bak" "$dest"
 		echo "install-codex: restored original AGENTS.md from backup"
+	elif [ -e "$dest" ] && grep -qF 'cortex:managed' "$dest" 2>/dev/null; then
+		rm -f "$dest"
+		echo "install-codex: removed Cortex-managed AGENTS.md (no prior user file to restore)"
 	elif [ -e "$dest" ]; then
-		echo "install-codex: left $dest in place (no backup to restore) - remove it by hand if unwanted" >&2
+		echo "install-codex: left $dest in place (not Cortex-managed) - remove it by hand if unwanted" >&2
 	fi
 	echo "install-codex: uninstall done."
 	exit 0
@@ -134,7 +150,7 @@ if [ -n "$profile_dir" ]; then
 	# so a re-run with a changed adapter can't clobber the original backup.
 	backup_existing() {
 		[ -e "$dest.cortex-bak" ] && return 0
-		grep -q '^## Cortex configuration' "$1" 2>/dev/null && return 0
+		grep -qF 'cortex:managed' "$1" 2>/dev/null && return 0
 		cp "$1" "$dest.cortex-bak"
 		echo "install-codex: backed up existing AGENTS.md to $dest.cortex-bak"
 	}
@@ -151,14 +167,22 @@ if [ -n "$profile_dir" ]; then
 	# Append the Cortex configuration block so sync-profile and the AGENTS.md memory
 	# pointer can resolve the profile repo. It is per-machine (a local path), so it
 	# lives in the on-disk AGENTS.md, not in the committed adapter.
-	if ! grep -q '^## Cortex configuration' "$dest"; then
+	if ! grep -qF 'cortex:managed' "$dest"; then
 		abs_profile="$(CDPATH= cd -- "$profile_dir" && pwd)"
 		remote="$(git -C "$profile_dir" remote get-url origin 2>/dev/null || true)"
 		{
-			printf '\n## Cortex configuration\n\n- Profile repo path: %s\n' "$abs_profile"
+			printf '\n%s\n## Cortex configuration\n\n- Profile repo path: %s\n' "$cortex_marker" "$abs_profile"
 			if [ -n "$remote" ]; then
-				host="$(printf '%s' "$remote" | sed -e 's#^[a-z][a-z]*://##' -e 's#.*@##' -e 's#[:/].*##')"
-				printf -- '- Remote: %s\n- Host: %s\n' "$remote" "$host"
+				# Strip any embedded userinfo (a token-in-URL origin) before recording -
+				# never write a PAT into AGENTS.md. Scheme match is case-insensitive.
+				remote_safe="$(printf '%s' "$remote" | sed -e 's#//[^/@]*@#//#')"
+				host="$(printf '%s' "$remote" | sed -e 's#^[A-Za-z][A-Za-z0-9+.-]*://##' -e 's#.*@##' -e 's#[:/].*##')"
+				printf -- '- Remote: %s\n' "$remote_safe"
+				# Only emit Host for a real network remote (non-empty, and not just the
+				# whole local path falling through unchanged).
+				if [ -n "$host" ] && [ "$host" != "$remote" ]; then
+					printf -- '- Host: %s\n' "$host"
+				fi
 			fi
 		} >>"$dest"
 	fi
@@ -187,9 +211,10 @@ if [ "$with_mcp" -eq 1 ]; then
 
 	# MCP server: prefer the Codex CLI, which writes the config.toml entry itself.
 	if command -v codex >/dev/null 2>&1; then
-		# -w avoids a bare substring match; the exact `codex mcp list` format should
-		# be confirmed against the installed build (see docs/TODO.md open checks).
-		if codex mcp list 2>/dev/null | grep -qw "cortex-git"; then
+		# Match cortex-git as a whitespace-delimited field (so 'cortex-git-staging'
+		# does not false-match). Exact `codex mcp list` format is unverified - see the
+		# open checks in docs/TODO.md.
+		if codex mcp list 2>/dev/null | grep -qE '(^|[[:space:]])cortex-git([[:space:]]|$)'; then
 			echo "install-codex: MCP server 'cortex-git' already registered - leaving it"
 		else
 			codex mcp add cortex-git -- "$launcher"
