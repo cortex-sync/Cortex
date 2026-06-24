@@ -108,13 +108,13 @@ if [ "$uninstall" -eq 1 ]; then
 	if [ -e "$dest.cortex-bak" ]; then
 		# A genuine original exists. If the user has since replaced the managed file
 		# with their own content, preserve that before restoring the backup.
-		if [ -e "$dest" ] && ! grep -qF 'cortex:managed' "$dest" 2>/dev/null; then
+		if [ -e "$dest" ] && ! grep -qxF "$cortex_marker" "$dest" 2>/dev/null; then
 			cp "$dest" "$dest.cortex-pre-uninstall"
 			echo "install-codex: current AGENTS.md is not Cortex-managed; saved it to $dest.cortex-pre-uninstall before restoring" >&2
 		fi
 		mv "$dest.cortex-bak" "$dest"
 		echo "install-codex: restored original AGENTS.md from backup"
-	elif [ -e "$dest" ] && grep -qF 'cortex:managed' "$dest" 2>/dev/null; then
+	elif [ -e "$dest" ] && grep -qxF "$cortex_marker" "$dest" 2>/dev/null; then
 		rm -f "$dest"
 		echo "install-codex: removed Cortex-managed AGENTS.md (no prior user file to restore)"
 	elif [ -e "$dest" ]; then
@@ -146,11 +146,12 @@ if [ -n "$profile_dir" ]; then
 		exit 1
 	fi
 	# Back up a genuine user-authored AGENTS.md exactly once: skip if a backup
-	# already exists, or if the file is already Cortex-managed (carries our block),
-	# so a re-run with a changed adapter can't clobber the original backup.
+	# already exists, or if the file is already Cortex-managed (matched on our exact
+	# whole-line marker, so prose merely mentioning the marker can't misclassify a
+	# real user file), so a re-run with a changed adapter can't clobber the backup.
 	backup_existing() {
 		[ -e "$dest.cortex-bak" ] && return 0
-		grep -qF 'cortex:managed' "$1" 2>/dev/null && return 0
+		grep -qxF "$cortex_marker" "$1" 2>/dev/null && return 0
 		cp "$1" "$dest.cortex-bak"
 		echo "install-codex: backed up existing AGENTS.md to $dest.cortex-bak"
 	}
@@ -167,21 +168,34 @@ if [ -n "$profile_dir" ]; then
 	# Append the Cortex configuration block so sync-profile and the AGENTS.md memory
 	# pointer can resolve the profile repo. It is per-machine (a local path), so it
 	# lives in the on-disk AGENTS.md, not in the committed adapter.
-	if ! grep -qF 'cortex:managed' "$dest"; then
+	if ! grep -qxF "$cortex_marker" "$dest"; then
 		abs_profile="$(CDPATH= cd -- "$profile_dir" && pwd)"
 		remote="$(git -C "$profile_dir" remote get-url origin 2>/dev/null || true)"
 		{
 			printf '\n%s\n## Cortex configuration\n\n- Profile repo path: %s\n' "$cortex_marker" "$abs_profile"
+			# Record Remote/Host only for an https origin - the only form Cortex
+			# supports (the server's RequireHTTPS enforces it). For anything else
+			# (ssh/scp/file/local path) skip both lines: it carries no info Cortex
+			# uses and could embed a credential we must never write to AGENTS.md.
+			# No origin remote -> record only the profile path above.
 			if [ -n "$remote" ]; then
-				# Strip any embedded userinfo (a token-in-URL origin) before recording -
-				# never write a PAT into AGENTS.md. Scheme match is case-insensitive.
-				remote_safe="$(printf '%s' "$remote" | sed -e 's#//[^/@]*@#//#')"
-				host="$(printf '%s' "$remote" | sed -e 's#^[A-Za-z][A-Za-z0-9+.-]*://##' -e 's#.*@##' -e 's#[:/].*##')"
-				printf -- '- Remote: %s\n' "$remote_safe"
-				# Only emit Host for a real network remote (non-empty, and not just the
-				# whole local path falling through unchanged).
-				if [ -n "$host" ] && [ "$host" != "$remote" ]; then
-					printf -- '- Host: %s\n' "$host"
+				scheme="$(printf '%s' "$remote" | sed -e 's#:.*##' | tr '[:upper:]' '[:lower:]')"
+				if [ "$scheme" = "https" ]; then
+					# Parse the authority with shell expansion (no fragile URL regex):
+					# strip the scheme, take up to the first '/', drop any userinfo
+					# (greedy to the last '@', so an '@' in a password is removed too)
+					# and any ':port'. Rebuild the remote without the userinfo.
+					rest="${remote#*://}"
+					authority="${rest%%/*}"
+					path="${rest#"$authority"}"
+					host="${authority##*@}"
+					host="${host%%:*}"
+					printf -- '- Remote: https://%s%s\n' "$host" "$path"
+					if [ -n "$host" ]; then
+						printf -- '- Host: %s\n' "$host"
+					fi
+				else
+					printf -- '- Remote: (non-https origin; not recorded - Cortex is HTTPS-only)\n'
 				fi
 			fi
 		} >>"$dest"
