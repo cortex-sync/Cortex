@@ -253,13 +253,17 @@ if [ -n "$profile_dir" ]; then
 fi
 if [ "$with_mcp" -eq 1 ]; then
 	echo "  - Tier 2 PREREQUISITE: the cortex-git server needs outbound network, which"
-	echo "    Codex blocks by default under workspace-write. Enable it in $codex_home/config.toml:"
+	echo "    Codex blocks by default. On current Codex (>= 0.14x) grant it with a named"
+	echo "    permissions profile in $codex_home/config.toml:"
 	echo
-	echo "        [sandbox_workspace_write]"
-	echo "        network_access = true"
+	echo "        [permissions.cortex]"
+	echo "        extends = \":workspace\""
+	echo "        network.enabled = true"
+	echo "        network.domains = [\"gitlab.com\", \"github.com\"]  # just your Git host(s)"
 	echo
-	echo "    (allowlist just your Git host if you use features.network_proxy). This is the"
-	echo "    least-privilege option; danger-full-access also works but disables the WHOLE"
-	echo "    sandbox - use it only as a session-scoped last resort. Then restart Codex and"
-	echo "    run /restore-profile or /sync-profile."
+	echo "    then select it with 'default_permissions = \"cortex\"' (or pass -P cortex)."
+	echo "    Older Codex used the legacy '[sandbox_workspace_write] network_access = true'"
+	echo "    form, which still works but is deprecated. danger-full-access also works but"
+	echo "    disables the WHOLE sandbox - session-scoped last resort only. Then restart"
+	echo "    Codex and run /restore-profile or /sync-profile."
 fi
