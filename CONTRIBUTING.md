@@ -7,17 +7,17 @@ and focused; prefer deleting code to adding it.
 ## Principles
 
 - **Single static binary, no runtime deps.** The MCP server must stay a pure-Go
-  binary — `go-git` for git (no system `git` at runtime), no CGO. This is a
+  binary - `go-git` for git (no system `git` at runtime), no CGO. This is a
   deliberate distribution and AV-friendliness choice.
 - **HTTPS + PAT only.** No SSH transport.
 - **Secrets never touch disk in plaintext.** PATs live in the OS keychain, or
-  the AES-256-GCM encrypted-file fallback — never in config files or commits.
+  the AES-256-GCM encrypted-file fallback - never in config files or commits.
 - **Business logic lives in `internal/`.** `cmd/server/main.go` only wires MCP
   tools to thin handlers; keep git/keychain logic in the `internal` packages.
 
 ## Prerequisites
 
-- Go 1.23+
+- Go 1.26+ (build pinned to 1.26.4; the module requires 1.26)
 - [lefthook](https://github.com/evilmartians/lefthook), `gitleaks`, and
   `commitizen` (`cz`) for the git hooks
 - `python3` with `PyYAML` for the `check-yaml` hook (`commitizen` already
@@ -26,7 +26,7 @@ and focused; prefer deleting code to adding it.
 
 ## Workflow
 
-1. Branch off `main` — never commit directly to `main`.
+1. Branch off `main` - never commit directly to `main`.
    Use a descriptive prefix: `feat/`, `fix/`, `refactor/`, `ci/`, `docs/`.
 2. Make the change, with tests.
 3. Run `make fmt && make validate` (gofmt, `go vet`, build, **and tests**)
@@ -34,8 +34,8 @@ and focused; prefer deleting code to adding it.
 4. Commit using [Conventional Commits](https://www.conventionalcommits.org)
    (`feat:`, `fix:`, `chore:`, `ci:`, `docs:`, `refactor:`, `test:`). The
    `commit-msg` hook enforces this.
-5. Open a merge request against `main`. CI must be green (lint, test, gitleaks)
-   before merge. Squash or keep history tidy; let the MR delete the branch.
+5. Open a pull request against `main`. CI must be green (lint, test, gitleaks)
+   before merge. Squash or keep history tidy; let the PR delete the branch.
 
 Stop and ask before any destructive git operation.
 
@@ -55,13 +55,13 @@ Stop and ask before any destructive git operation.
 The suite is now comprehensive and CI enforces a **70% coverage floor** (see
 `.github/workflows/ci.yml`), so changes should be **test-driven by default**:
 write or adjust the failing test first, watch it fail, then implement until it
-passes. This is the expected workflow now, not an afterthought — the floor will
+passes. This is the expected workflow now, not an afterthought - the floor will
 reject a change that drops coverage below it anyway, and behaviour changes to the
 git wrapper have already shipped this way (e.g. the last-write-wins pull and the
 unpushed-commit flush fixes).
 
 - Every exported function in `internal/` should have coverage.
-- **Tests must run offline and hermetically** — no real network, no real OS
+- **Tests must run offline and hermetically** - no real network, no real OS
   keychain, no shared global state left behind. Use `t.TempDir()` for repos.
 - Use `keyring.MockInit()` for keychain tests; use a local bare repo for git
   network operations (see `internal/git/git_test.go` `TestSyncRoundTrip`).
@@ -77,13 +77,13 @@ unpushed-commit flush fixes).
 ## Running from a local checkout
 
 Cortex is not published to a plugin marketplace yet, so for now you run it from
-a local checkout. This is the canonical local-run guide — the README and usage
+a local checkout. This is the canonical local-run guide - the README and usage
 guide point here rather than repeating the steps.
 
 The bundled `.mcp.json` resolves the server binary through
 `${CLAUDE_PLUGIN_ROOT}`, which Claude Code only sets when it loads Cortex **as a
 plugin**. Opening this repo as an ordinary project leaves the variable
-unexpanded, so the `cortex-git` server will not start — that is expected, not a
+unexpanded, so the `cortex-git` server will not start - that is expected, not a
 bug.
 
 1. Build the server binary: `make build` (outputs
@@ -95,22 +95,22 @@ bug.
 3. After changing plugin files, run `/reload-plugins` to pick up the changes
    without restarting.
 
-Setting `${CLAUDE_PLUGIN_ROOT}` by hand is not a supported workflow — use
+Setting `${CLAUDE_PLUGIN_ROOT}` by hand is not a supported workflow - use
 `--plugin-dir`. Marketplace install instructions will be added once publishing
 lands.
 
 ## Security rules
 
-- Never commit credentials or secrets — `gitleaks` runs locally (pre-commit)
+- Never commit credentials or secrets - `gitleaks` runs locally (pre-commit)
   **and** in CI (cannot be bypassed with `--no-verify`).
 - PATs are accepted only via `set_credentials` and stored in the credential
   store; never written to files or echoed back.
-- The `profile-template/.gitignore` is the profile repo's safety net — keep its
+- The `profile-template/.gitignore` is the profile repo's safety net - keep its
   secret patterns in sync with the `sync-profile` skill's safety gate.
 
 ## Dependencies
 
-Keep the dependency tree small — justify every new dependency in the MR. Cortex
+Keep the dependency tree small - justify every new dependency in the PR. Cortex
 is a personal project running on home CI, so public registries (Go module
 proxy, Docker Hub, ghcr.io) are acceptable; pin versions for anything in CI.
 

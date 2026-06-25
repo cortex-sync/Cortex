@@ -26,7 +26,8 @@ import (
 // Environment (set by e2e/run.sh):
 //
 //	E2E_REMOTE_URL  https clone URL of a freshly created EMPTY repo
-//	E2E_HOST        host key credentials are stored under (matches ParseHost)
+//	E2E_HOST        host key credentials are stored under (the origin hostname,
+//	                as resolved by RequireHTTPS/url.Hostname())
 //	E2E_USERNAME    Gitea username
 //	E2E_TOKEN       Gitea personal access token
 //	SSL_CERT_FILE   path to the self-signed cert, trusted by the subprocess

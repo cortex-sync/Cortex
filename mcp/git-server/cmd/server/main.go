@@ -128,8 +128,7 @@ func gitOpTimeout() time.Duration {
 
 // gitOpContext derives a per-operation context from the request context, bounded
 // by gitOpTimeout. The caller must call the returned cancel func when the
-// operation completes (defer cancel()). It composes with the request context's
-// own cancellation - whichever fires first aborts the git operation.
+// operation completes (defer cancel()).
 func gitOpContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, gitOpTimeout())
 }

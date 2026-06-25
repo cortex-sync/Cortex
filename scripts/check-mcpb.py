@@ -59,8 +59,9 @@ def check_bundle(path: str) -> list[str]:
         errors.append(_fail(path, f"server.entry_point '{entry}' is not in the bundle"))
     elif not entry.endswith(".exe"):
         # On Unix the binary must be executable, or the host can't launch it.
-        mode = (z.getinfo(entry).external_attr >> 16) & 0o777
-        is_reg = (z.getinfo(entry).external_attr >> 16) & 0o170000 == 0o100000
+        attr = z.getinfo(entry).external_attr >> 16
+        mode = attr & 0o777
+        is_reg = attr & 0o170000 == 0o100000
         if not is_reg:
             errors.append(_fail(path, f"'{entry}' is missing the regular-file (S_IFREG) flag"))
         if not mode & 0o111:

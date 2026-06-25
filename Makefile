@@ -1,4 +1,4 @@
-.PHONY: fmt lint validate build build-all clean hooks-install release-dry-run licenses e2e mcpb mcpb-all mcpb-check test-launcher
+.PHONY: fmt lint validate build build-all clean hooks-install release-dry-run licenses e2e mcpb mcpb-all mcpb-check test-launcher icon
 
 # Pin the tool that drives every dev's pre-commit hooks, rather than tracking a
 # moving @latest (consistent with the pinned golangci-lint/gosec/govulncheck).
@@ -48,6 +48,11 @@ mcpb-all:
 # bit, icon, tools). Runs in CI; run locally after `make mcpb`/`mcpb-all`.
 mcpb-check:
 	python3 scripts/check-mcpb.py dist
+
+# Regenerate the committed .mcpb bundle icon. The output (mcpb/icon.png) is
+# checked in, so this only needs running if the icon design changes.
+icon:
+	python3 scripts/gen-icon.py mcpb/icon.png
 
 # Test the launcher's SHA-256 integrity gate (fail-closed) against a local
 # fixture release - no network. See scripts/test-launcher.sh.

@@ -19,7 +19,7 @@ You are syncing the user's Cortex AI profile to their Git repository.
 
    If anything matches, do not commit. Report the offending files and ask the user how to proceed (typically: add it to the profile repo's `.gitignore`, then re-run). The profile repo ships a `.gitignore` covering these patterns, but treat this gate as authoritative regardless.
 
-   This filename check is your first line of defence. `git_commit_push` *also* enforces a server-side **content** scan (it inspects file bodies for credential patterns - AWS keys, private-key blocks, GitLab/GitHub PATs, JWTs, generic `secret = "..."` assignments) and refuses the commit if any are found, naming the offending `file:line`. That backstop catches a secret pasted into a memory file's text, which a filename check cannot - but do not rely on it as a substitute for this gate.
+   This filename check is your first line of defence. `git_commit_push` *also* enforces a server-side **content** scan (it inspects file bodies for credential patterns - AWS keys, Azure keys, private-key blocks, GitLab/GitHub PATs, JWTs, Slack tokens, Google API keys, generic `secret = "..."` assignments) and refuses the commit if any are found, naming the offending `file:line`. That backstop catches a secret pasted into a memory file's text, which a filename check cannot - but do not rely on it as a substitute for this gate.
 
 3. From the `git_status` file list, summarise what changed (which memory files were modified, added, or deleted).
 

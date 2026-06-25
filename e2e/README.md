@@ -51,15 +51,12 @@ subprocess trusts it by having `SSL_CERT_FILE` point at the cert, which Go's
 `crypto/x509` honours when building the system cert pool. No code changes and no
 OS trust-store modification are needed.
 
-## Credential isolation and the dev-machine caveat
+## Credential isolation
 
-The test points `XDG_CONFIG_HOME` at a temp dir, so on headless Linux, WSL2, and
-CI - where there is no OS Secret Service - the encrypted-file backend writes only
-into that temp dir and nothing persists.
-
-**Caveat:** on a workstation with a live OS keychain (e.g. macOS, or Linux with
-gnome-keyring), `set_credentials` stores under the OS keychain, which ignores
-`XDG_CONFIG_HOME`. The throwaway token for host `localhost` would then be written
-to your real keychain (harmless, but untidy). A future `CORTEX_CONFIG_DIR` /
-force-file-backend override (see `docs/TODO.md`) would remove this wart by
-letting the test pin the file backend on every platform.
+The test pins the credential store to a per-test temp dir via `CORTEX_CONFIG_DIR`,
+which forces the encrypted-file backend on **every** platform (the keychain probe
+never runs) and writes `credentials.enc` only into that temp dir, so nothing
+persists and the throwaway `localhost` token never touches your real OS keychain.
+This supersedes the older `XDG_CONFIG_HOME` approach, which only isolated the file
+backend on Linux and left a workstation with a live keychain writing to the real
+store.

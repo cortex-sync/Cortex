@@ -49,11 +49,13 @@ Stage all changes, commit, and push to `origin`.
 
 **Behaviour:** stages everything not gitignored, then runs a **server-side
 secret scan** over the content of the changed files; if any high-signal
-credential pattern matches (AWS keys, private-key blocks, GitLab/GitHub PATs,
-JWTs, generic `secret = "..."` assignments) the commit is refused before
-anything is written or pushed. Otherwise it commits as `Cortex <cortex@local>`
-and pushes. **Returns:** `committed and pushed: <hash>`, or `nothing to commit,
-working tree clean - no push needed`.
+credential pattern matches (AWS keys, Azure keys, private-key blocks, GitLab/GitHub
+PATs, JWTs, Slack tokens, Google API keys, generic `secret = "..."` assignments)
+the commit is refused before anything is written or pushed. Otherwise it commits
+as `Cortex <cortex@local>` and pushes. **Returns** one of: `committed and pushed:
+<hash>`; `no file changes; pushed pending local commit(s)` (clean worktree but
+unpushed local commits - still pushed); `nothing to commit, already up to date`;
+or `nothing to commit, working tree clean` (no `origin` remote configured).
 **Errors:** no `origin` remote, no credentials, push rejected (e.g. remote
 diverged - see `git_pull`), or `refusing to commit: N potential secret(s)
 detected` followed by the offending `file:line (rule)` list (the matched secret
@@ -70,7 +72,7 @@ Pull the latest from `origin`, **force-updating** the local branch.
 | `repo_path` | yes | Absolute path to the local profile repo |
 
 **Behaviour:** last-write-wins (`Force: true`) - can overwrite local divergence.
-**Returns:** `pulled latest changes` or `already up to date`.
+**Returns:** `pulled latest changes (reset to origin/<branch>)` or `already up to date`.
 
 ## `git_clone`
 

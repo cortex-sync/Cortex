@@ -8,6 +8,10 @@ mcp/git-server/bin/
 # Go build artefacts
 mcp/git-server/vendor/
 
+# Python bytecode cache from the scripts/ helpers
+__pycache__/
+*.pyc
+
 # Release / packaging output (goreleaser and `make mcpb` both write here)
 dist/
 

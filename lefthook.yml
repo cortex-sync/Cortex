@@ -57,6 +57,14 @@ pre-commit:
         exit 0
       fail_text: "Invalid JSON"
 
+    no-em-dash:
+      glob: "{*,**/*}.{go,md,yaml,yml,json,sh,py}"
+      exclude:
+        - THIRD_PARTY_LICENSES.md
+      run: |
+        perl -CSD -ne 'if (/[\x{2012}-\x{2015}\x{2212}]/) { print "$ARGV:$.: $_"; $rc = 1 } close ARGV if eof; END { exit($rc ? 1 : 0) }' {staged_files}
+      fail_text: "Em/en-dash found - use ' - ' (a hyphen with surrounding spaces) instead"
+
 commit-msg:
   commands:
     commitizen:

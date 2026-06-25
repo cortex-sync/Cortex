@@ -28,7 +28,8 @@ automatically at runtime:
 | Headless Linux / WSL2 / container / CI | Encrypted file | No Secret Service available |
 
 Selection works by probing the OS keychain once: a working-but-empty keychain
-selects the keychain backend; a "Secret Service unavailable" error falls back to
+selects the keychain backend; any error other than not-found from the probe
+(no Secret Service, a locked keyring, a D-Bus failure, and so on) falls back to
 the file. `get_auth_status` / `set_credentials` report which backend is active.
 
 Setting `CORTEX_CONFIG_DIR` in the server's environment overrides selection
@@ -56,9 +57,9 @@ When no OS keychain is available, credentials are written to
 - **AES-256-GCM**, with the random nonce prefixed to the ciphertext.
 - File mode `0600`, written atomically (temp file + rename).
 - The key is derived (SHA-256) from a machine-bound identifier
-  (`/etc/machine-id`, or `CORTEX_MACHINE_ID` if set) mixed with the current
-  user's id and a fixed domain string, so the file is **non-portable** and never
-  stored as plaintext.
+  (`CORTEX_MACHINE_ID` if set, else an OS machine-id file - `/etc/machine-id` or
+  `/var/lib/dbus/machine-id`) mixed with the current user's id and a fixed domain
+  string, so the file is **non-portable** and never stored as plaintext.
 
 **Accepted limitation.** The key is derived automatically with no user
 passphrase, so any process running as the same user on the same machine can
@@ -114,8 +115,9 @@ injected platform secret), or use an OS keychain instead of the file backend.
   enforces a **server-side content scan**: it reads the body of every changed
   file and refuses the commit if a high-signal credential pattern matches (AWS
   access-key IDs and secret keys, Azure storage / Service Bus keys, private-key
-  blocks including encrypted ones, GitLab/GitHub PATs, JWTs, and quoted *or*
-  unquoted `secret = ...` assignments), reporting the offending `file:line
+  blocks including encrypted ones, GitLab/GitHub PATs, JWTs, Slack tokens, Google
+  API keys, and quoted *or* unquoted `secret = ...` assignments), reporting the
+  offending `file:line
   (rule)` without ever echoing the secret value. It scans the *text* of changed
   files: binary blobs are skipped and an oversized file (>5 MiB) is scanned only
   up to that limit, since the threat is an accidental paste into a small text
@@ -157,7 +159,7 @@ be public.
 
 | Concern | Mitigation |
 |---|---|
-| PAT stolen from disk | OS keychain, or encrypted-file fallback (`0600`, machine-bound via `/etc/machine-id` / `CORTEX_MACHINE_ID`; portable with a warning where neither exists) |
+| PAT stolen from disk | OS keychain, or encrypted-file fallback (`0600`, machine-bound via an OS machine-id file (`/etc/machine-id` or `/var/lib/dbus/machine-id`) / `CORTEX_MACHINE_ID`; portable with a warning where none exists) |
 | PAT in transcript | Documented caveat; rotate; non-transcript entry tracked |
 | Secrets committed to the repo | Server-side content scan in `git_commit_push` (fails closed), filename sync gate, profile `.gitignore`, optional gitleaks pre-commit hook |
 | Token over cleartext / odd transport | HTTPS + PAT only (`https://` scheme enforced, fails closed) |
