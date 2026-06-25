@@ -227,7 +227,10 @@ changes first.
 
 `get_auth_status <host>` reports `backend: keychain` or `backend: file`. The file
 backend lives at `${XDG_CONFIG_HOME:-~/.config}/cortex/credentials.enc` (mode
-`0600`, encrypted).
+`0600`, encrypted). If `CORTEX_CONFIG_DIR` is set in the server's environment it
+overrides both: the file backend is forced (the keychain probe never runs) and
+`credentials.enc` lives at `$CORTEX_CONFIG_DIR/credentials.enc` instead. When in
+doubt, trust what `get_auth_status` reports - it reflects the live backend and path.
 
 ### A secret got blocked from syncing
 

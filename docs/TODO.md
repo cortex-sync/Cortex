@@ -92,7 +92,8 @@ internal mirror.
       it through `RequireHTTPS` so the stored key == the resolve key. Add a regression
       test. Relates to L4 (env path) - do both as one host-normalisation pass.
 - [ ] *(info, optional)* enforce `0700` on the credentials dir when it pre-exists
-      (`internal/keychain/file_store.go:158-161`); add a regression test asserting no
+      (the `os.MkdirAll(dir, 0o700)` in `fileStore.save`,
+      `internal/keychain/file_store.go:183-184`); add a regression test asserting no
       credential-handler output ever contains the token (PAT-in-logs verified clean
       today - keep it that way).
 
