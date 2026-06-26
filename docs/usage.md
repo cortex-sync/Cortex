@@ -104,15 +104,25 @@ the named host only and is never written to the transcript.
 
 Cortex also runs on the **OpenAI Codex CLI**. Codex uses the same building blocks as
 Claude Code - a global instruction file, stdio MCP servers, and `SKILL.md` skills - so
-your profile carries over. It has no plugin installer, so setup is a small host-side
-step via `scripts/install-codex.sh`. There are two tiers.
+your profile carries over. Setup today is a small host-side step via
+`scripts/install-codex.sh`. (Codex now also has a plugin/marketplace system, and Cortex
+shipping as a native Codex plugin is planned - see `docs/TODO.md`; the script is the
+supported route for now.) There are two tiers.
+
+> **Coming from Claude Code?** On first run Codex may offer to *import your existing
+> Claude setup*. You can decline that and use Cortex instead - the point of Cortex is a
+> single **portable, Git-synced** profile that stays consistent across engines, rather
+> than a one-time static copy living only in Codex. (Importing is harmless if you do it;
+> Cortex's `AGENTS.md` is what Codex actually loads either way.) Just run the Tier 1 step
+> below and Codex picks up your persona and memory.
 
 ### Tier 1 - profile consumer (recommended)
 
 Codex loads your persona, working style, and memory; **sync stays host-side** (keep
 running `/sync-profile` from Claude Code). No MCP server and no skills run inside Codex,
-so there is **no network dependency**. (Memory reading still depends on Codex's
-*filesystem* sandbox - see the note below; verify it first.) This is the robust default.
+so there is **no network dependency**. (Verified on Codex 0.142.1: under the default
+sandbox, memory reads work even when the profile repo sits outside the workspace - see
+the note below.) This is the robust default.
 
 You need your profile repo on disk. If it is not already cloned (e.g. from Claude Code),
 clone it **without persisting your PAT**: `git clone https://<host>/<owner>/<repo>.git ~/cortex-profile`
@@ -132,11 +142,13 @@ recording the profile repo path. Codex auto-loads `AGENTS.md`; your `memory/` fi
 the profile repo, and that block is how the memory pointer (and a later Tier 2 `/sync-profile`)
 resolves the repo path.
 
-> **Memory reads under the sandbox:** if Codex runs with the default `workspace-write`
-> sandbox and your profile repo sits outside the workspace, Codex may be unable to read
-> `memory/`. Add the profile path to Codex's trusted paths, launch Codex from within the
-> profile directory, or keep the most important context inline in `AGENTS.md` (within
-> Codex's ~32 KiB instruction-file limit).
+> **Memory reads under the sandbox:** verified on Codex 0.142.1 - under the default
+> `workspace-write` sandbox Codex reads files **outside** the workspace (full-disk read;
+> only writes are confined), so reading a profile repo at e.g. `~/cortex-profile` works
+> with no extra setup. Only if you have tightened the sandbox to deny reads outside the
+> workspace do you need a mitigation: grant the path read access in a permissions profile
+> (`filesystem."/abs/path" = "read"`), launch Codex from within the profile directory, or
+> keep the most important context inline in `AGENTS.md` (within Codex's ~32 KiB limit).
 
 > **Secret-scan caveat:** the content scan that blocks committing a secret runs only on the
 > `cortex-git` `git_commit_push` path (Tier 2, or any Claude-side sync). A Tier 1 host-side
@@ -158,22 +170,28 @@ ever must fall back to a token in `config.toml`, note it is plaintext there: `co
 is not mode `0600`, and the value is also visible via `/proc/PID/environ`.)
 
 **Prerequisite - allow the network (least privilege).** The server makes outbound HTTPS to
-your Git host, and Codex blocks network by default under `workspace-write`. The preferred
-fix scopes the change to the workspace. In `~/.codex/config.toml`:
+your Git host, and Codex blocks network by default. On current Codex (>= 0.14x), scope the
+grant with a named permissions profile in `~/.codex/config.toml`:
 
 ```toml
-[sandbox_workspace_write]
-network_access = true
+[permissions.cortex]
+extends = ":workspace"
+network.enabled = true
+network.domains = ["gitlab.com", "github.com"]  # just your Git host(s)
 ```
 
-(allowlist just your Git host too if you use `features.network_proxy`). **`danger-full-access`
-also works but disables the *entire* sandbox** - all filesystem-write and network confinement,
-for every command in the session - so treat it as a session-scoped last resort, not the
-default. Some Codex builds also had a bug that cancelled MCP tool calls under
-`workspace-write`/`read-only` ("user cancelled MCP tool call") - reported on `0.125.0-alpha.3`
-and may already be fixed; check your build. If you hit it, prefer staying on Tier 1
-(host-side sync) over reaching for `danger-full-access`. If you'd rather not open the sandbox
-at all, stay on Tier 1.
+then select it with `default_permissions = "cortex"` (or pass `-P cortex`). Older Codex used
+the legacy `[sandbox_workspace_write] network_access = true` form, which still works but is
+deprecated. **`danger-full-access` also works but disables the *entire* sandbox** - all
+filesystem-write and network confinement, for every command in the session - so treat it as a
+session-scoped last resort, not the default.
+
+> **Known issue - MCP tool calls cancelled under the sandbox.** Confirmed on Codex 0.142.1:
+> invoking an MCP tool via `codex exec` is auto-cancelled ("user cancelled MCP tool call")
+> across sandbox modes and approval settings - not yet verified in the interactive TUI (the
+> normal day-to-day mode). If you hit it, prefer staying on **Tier 1** (host-side sync via
+> Claude Code) over reaching for `danger-full-access`. If you'd rather not open the sandbox at
+> all, stay on Tier 1.
 
 ### Windows
 
