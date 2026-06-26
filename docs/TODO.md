@@ -423,8 +423,18 @@ constraint (same shape as the Cowork finding):
 - **Skill bodies already portable** - bare tool names (`git_status`...), no
   `mcp__plugin_*` prefixes, no `/plugin` framing.
 
-**No plugin/marketplace in Codex** - distribution is the `scripts/install-codex.sh`
-bootstrap (does what `/plugin install` does on Claude) + the restore/setup skill branch.
+**Distribution.** Today: the `scripts/install-codex.sh` bootstrap + the restore/setup
+skill branch. **Update (2026-06-26): Codex now HAS a plugin + marketplace system**
+(`codex plugin`, `codex plugin marketplace`) - this supersedes the earlier "no
+plugin/marketplace" note. A plugin bundles **skills, MCP servers, and hooks**; a
+marketplace is a local dir or **Git repo** with `.agents/plugins/marketplace.json`.
+Proven hands-on that installing a plugin registers a **bundled local stdio MCP server**
+with no manual `config.toml` edit - so Cortex can ship Tier 2 (MCP + skills) as a
+first-class plugin: add `.agents/plugins/marketplace.json` + `plugins/cortex/` to this
+repo, then `codex plugin marketplace add cortex-sync/Cortex` + `codex plugin add cortex`.
+Tier 1 (AGENTS.md) stays host/script-managed (plugins carry no instructions field). See
+the **live-validation addendum** at the end of this section for the proven manifest
+schema and open packaging questions.
 
 **Sub-tasks for Codex (priority order):**
 (i) ✅ **(done 2026-06-24) Generate the AGENTS.md adapter from `adapters/generic.md`**
@@ -512,22 +522,48 @@ is host-side git). Remaining low/by-design: native Windows launcher (already a f
 above); the secret-scan caveat is documented, not closed.
 
 **Open Codex checks (hands-on in a real install):**
-- [ ] **⛔ BLOCKING (pre-ship) - Codex memory-read under the sandbox.** Confirm whether
-      Codex can read the profile repo's `memory/*.md` when it sits **outside** the
-      workspace under the default `workspace-write` sandbox. This is the hinge for Tier 1:
-      if reads work, Tier 1 "just works"; if they are blocked, the documented mitigations
-      (trusted path / launch from the profile dir / inline memory into `AGENTS.md`) become
-      **required setup**, not optional fallbacks - and `adapters/codex.md` + the
-      `restore-profile`/`usage.md` Tier 1 steps must be updated to say so. Cheapest,
-      highest-value check; do it before merging the Codex work for real-world use.
-- [ ] **Tier 2 end-to-end** on a real Codex install with `network_access = true`: does
-      `git_commit_push` via the MCP server actually push, or does the MCP-cancel bug bite?
-- [ ] **Exact `codex mcp add` flags** (env / cwd) on the installed Codex build, before
-      relying on the `install-codex.sh --with-mcp` wiring.
+- [x] **⛔ BLOCKING (pre-ship) - Codex memory-read under the sandbox. RESOLVED 2026-06-26
+      (Codex 0.142.1): reads WORK, no mitigation needed.** Under a `:workspace` permissions
+      profile Codex reads files outside the workspace (full-disk read; writes confined),
+      and `:read-only` denies writes (sandbox genuinely enforces on WSL2/kernel 6.18).
+      Tier 1 "just works"; the documented mitigations are optional fallbacks, not required.
+- [~] **Tier 2 end-to-end - PARTIAL (2026-06-26).** Codex discovers all cortex-git tools
+      (namespaced `mcp__cortex_git.<tool>`) and the server is fully functional standalone,
+      BUT invoking any tool via `codex exec` hits the **MCP-cancel bug** ("user cancelled
+      MCP tool call") across every sandbox + approval mode - still live in 0.142.1. The
+      **interactive TUI** path is the daily-use mode and remains untested (needs a real
+      TTY). Recheck there before declaring Tier 2 daily-usable.
+- [x] **Exact `codex mcp add` flags - RESOLVED 2026-06-26.** `codex mcp add <NAME> (--url
+      <URL> | -- <COMMAND>...)` with `--env KEY=VALUE` for stdio servers; the
+      `install-codex.sh --with-mcp` wiring (`codex mcp add cortex-git -- <launcher>`) is correct.
+
+**Live-validation addendum (2026-06-26, Codex CLI 0.142.1).** Hands-on against a real,
+logged-in install (model `gpt-5.5`); prior notes were written vs `0.125.0-alpha.3`.
+- **Tier 1 PROVEN end-to-end:** `install-codex.sh --profile-dir` placed `AGENTS.md` (+
+  token-free Cortex config block); `codex exec` woke as Bree and named the memory path
+  from the block. With the sandbox read result above, the migration guarantee holds.
+- **Permissions model refactored:** flat `sandbox_mode` -> `[permissions.<name>]` profiles
+  (`filesystem`/`network`/`extends`; parents `:workspace`, `:read-only`; select via
+  `default_permissions`). Legacy `sandbox_mode` + `[sandbox_workspace_write]` deprecated but
+  still works. `codex sandbox` now requires `-P <profile>` + a `[permissions]` table. The
+  Tier 2 network hint in `install-codex.sh` was updated to the `permissions.<p>.network`
+  form (legacy noted as fallback).
+- **Plugin-as-distribution PROVEN viable.** Manifest `.codex-plugin/plugin.json`:
+  `"skills": "./skills/"`, `"mcpServers": "./.mcp.json"` (wrapped `{"mcpServers":{...}}`),
+  `"apps"`, `"hooks"`, `interface{}`. `marketplace.json` at `<root>/.agents/plugins/`;
+  plugin entry `policy.authentication` must be `ON_INSTALL` | `ON_USE` (NOT `NONE`).
+  `codex plugin marketplace add <dir|owner/repo|git-url>` + `codex plugin add <n>@<mp>`.
+  Installing a test plugin registered its bundled **local stdio MCP** (visible in
+  `codex mcp list`) with no `[mcp_servers]` edit. **Open packaging Qs:** what root/env-var
+  Codex gives a plugin's `mcpServers.command` (Claude uses `${CLAUDE_PLUGIN_ROOT}`); and
+  `bin/VERSION` must point at a real release before the launcher's download path works.
+- **Native memory complements, not competes:** `~/.codex/memories_1.sqlite` /
+  `goals_1.sqlite` are auto-derived, usage-ranked, local-only session memory/goals - the
+  opposite layer to Cortex's authored, git-synced profile. No collision (both currently empty).
 
 **Refs:** Codex docs (config-reference, mcp, guides/agents-md, skills,
-concepts/sandboxing, agent-approvals-security, hooks, windows); openai/codex#20603
-(SessionEnd request). Plan: `~/.claude/plans/jolly-tumbling-cherny.md`.
+concepts/sandboxing, agent-approvals-security, hooks, windows, plugins, plugins/build);
+openai/codex#20603 (SessionEnd request). Plan: `~/.claude/plans/jolly-tumbling-cherny.md`.
 
 ## Publishing / install
 
