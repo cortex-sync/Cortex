@@ -45,6 +45,12 @@ the launcher prefers a local build when present. See
 > runs `cortex-git` as a local MCP server, with your PAT supplied through Claude's
 > config UI - see [Cowork / Claude Desktop](docs/usage.md#cowork--claude-desktop-mcpb-bundle).
 > Browser and mobile have no local runtime and are out of scope.
+>
+> **Moving to the OpenAI Codex CLI?** Your profile carries over - run one host-side
+> script and Codex loads the same persona and memory. If Codex offers to import your
+> Claude setup on first run, you can decline and use Cortex instead (one portable,
+> Git-synced profile across engines, not a static local copy). See
+> [Codex CLI](docs/usage.md#codex-cli).
 
 ## Quick start
 
