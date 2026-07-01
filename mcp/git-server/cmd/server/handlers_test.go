@@ -96,6 +96,78 @@ func TestGitNetworkHandlersMissingCreds(t *testing.T) {
 	}
 }
 
+// TestGitNetworkHandlersOperationError drives each network handler PAST the host
+// and credential gates - a PAT is stored for the target host - and into the git
+// operation itself, which then fails deterministically and without any network
+// access. This covers the post-credential path (gitOpContext + the igit call +
+// result handling) that the bad-host and missing-creds tests above stop short of.
+//
+// commit_push is deliberately not exercised here: it always attempts a push (to
+// flush unpushed commits) so it cannot fail before the network without a fragile
+// setup - its round-trip is covered by the e2e test in CI instead.
+func TestGitNetworkHandlersOperationError(t *testing.T) {
+	// A local path that is already a git repo makes PlainCloneContext fail with
+	// "repository already exists" before it opens any network connection.
+	existingRepo := repoWithRemote(t, "https://clone.op.example/u/r.git")
+
+	cases := []struct {
+		name    string
+		h       handler
+		host    string
+		args    map[string]interface{}
+		isError bool   // whether the handler should report IsError
+		want    string // substring the result/error text must contain
+	}{
+		{
+			name: "pull", h: gitPullHandler, host: "pull.op.example",
+			args: map[string]interface{}{
+				// Fresh repo has no HEAD, so Pull fails before it fetches.
+				"repo_path": repoWithRemote(t, "https://pull.op.example/u/r.git"),
+			},
+			isError: true, want: "resolving HEAD",
+		},
+		{
+			name: "clone", h: gitCloneHandler, host: "clone.op.example",
+			args: map[string]interface{}{
+				"remote_url": "https://clone.op.example/u/r.git",
+				"local_path": existingRepo, // already a repo -> fails before network
+			},
+			isError: true, want: "already exists",
+		},
+		{
+			name: "init", h: gitInitHandler, host: "init.op.example",
+			args: map[string]interface{}{
+				"remote_url": "https://init.op.example/u/r.git",
+				"local_path": t.TempDir(), // empty -> nothing to commit, before push
+				"message":    "m",
+			},
+			isError: true, want: "nothing to commit",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := keychain.SetCredentials(tc.host, "user", "tok"); err != nil {
+				t.Fatalf("SetCredentials: %v", err)
+			}
+			t.Cleanup(func() { _ = keychain.DeleteCredentials(tc.host) })
+
+			res := call(t, tc.h, tc.args)
+			if res.IsError != tc.isError {
+				t.Fatalf("%s: IsError = %v, want %v (result %q)", tc.name, res.IsError, tc.isError, resultText(t, res))
+			}
+			txt := resultText(t, res)
+			if !strings.Contains(txt, tc.want) {
+				t.Fatalf("%s: result = %q, want it to contain %q", tc.name, txt, tc.want)
+			}
+			// Guard: prove we got past the early gates into the operation, so this
+			// really exercises the post-credential path and not an earlier return.
+			if strings.Contains(txt, "no credentials found") || strings.Contains(txt, "could not determine remote host") {
+				t.Fatalf("%s: stopped at an early gate (%q); operation path not exercised", tc.name, txt)
+			}
+		})
+	}
+}
+
 // TestSetCredentialsHandlerStores covers the set_credentials success path (no
 // environment override) and confirms the stored PAT round-trips through
 // resolveCreds.
