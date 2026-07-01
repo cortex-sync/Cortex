@@ -72,8 +72,14 @@ if [ ! -x "$bin" ]; then
 	trap 'rm -rf "$tmp"' EXIT
 
 	echo "cortex-git launcher: fetching $archive ($tag)..." >&2
-	curl -fsSL "$base/$archive" -o "$tmp/$archive" ||
-		{ echo "cortex-git launcher: download failed: $base/$archive" >&2; exit 1; }
+	curl -fsSL "$base/$archive" -o "$tmp/$archive" || {
+		echo "cortex-git launcher: could not fetch the MCP server binary for $tag ($base/$archive)." >&2
+		echo "cortex-git launcher: that release asset may not be published yet - without it the cortex-git tools cannot start." >&2
+		echo "cortex-git launcher: from a source checkout, build it locally instead:" >&2
+		echo "cortex-git launcher:     (cd \"$root/mcp/git-server\" && make build)   # needs Go" >&2
+		echo "cortex-git launcher: then reload the plugin. Details: docs/usage.md > Troubleshooting." >&2
+		exit 1
+	}
 	curl -fsSL "$base/checksums.txt" -o "$tmp/checksums.txt" ||
 		{ echo "cortex-git launcher: checksums download failed: $base/checksums.txt" >&2; exit 1; }
 
