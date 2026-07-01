@@ -1,7 +1,7 @@
 # Codecov configuration.
 #
 # Coverage is hard-gated in CI by a bash floor (see the `test` job in
-# .github/workflows/ci.yml, currently 70%). These settings drive the Codecov
+# .github/workflows/ci.yml, currently 75%). These settings drive the Codecov
 # dashboard, commit statuses, and PR comments - they are intentionally
 # low-noise so they inform rather than block (the repo has no required status
 # checks).

@@ -61,7 +61,7 @@ jobs:
           go tool cover -func=coverage.out | tail -1
       - name: enforce coverage floor
         run: |
-          floor=70.0
+          floor=75.0
           total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}' | tr -d '%')
           echo "total coverage: ${total}% (floor ${floor}%)"
           awk -v t="$total" -v f="$floor" 'BEGIN { exit (t+0 >= f+0) ? 0 : 1 }' || {
