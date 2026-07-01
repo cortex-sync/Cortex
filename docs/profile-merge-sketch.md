@@ -1,7 +1,10 @@
 # Profile merge - design sketch
 
-**Status:** Sketch (not implemented) - for a later full implementation\
-**Date:** 2026-06-17
+**Status:** Implemented - the reconcile flow lives in `restore-profile`
+("Reconcile an existing local profile"), and `setup` Section 0 forks to it for the
+existing-local-file + populated-remote case. This document is retained as the design
+record.\
+**Date:** 2026-06-17 (implemented 2026-07-01)
 
 ---
 
