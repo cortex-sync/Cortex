@@ -13,7 +13,10 @@ troubleshooting.
 >
 > The plugin downloads its prebuilt MCP-server binary on first run (needs `curl`,
 > `tar`, and `sha256sum`/`shasum`; on Windows, run under WSL). See the
-> [README](../README.md#installation) for details.
+> [README](../README.md#installation) for details. If that download fails (for
+> example the release for the pinned version isn't published yet) the `cortex-git`
+> tools won't appear - see
+> [The `cortex-git` tools don't appear](#the-cortex-git-tools-dont-appear).
 
 ## Concepts
 
@@ -211,6 +214,29 @@ planned enhancement; for now point at the release `.exe` directly.)
 ---
 
 ## Troubleshooting
+
+### The `cortex-git` tools don't appear
+
+The plugin looks loaded, but `set_credentials`, `git_clone`, and the rest aren't
+available - so `/sync-profile` and `/restore-profile` report no usable git tools.
+The MCP server binary never started, almost always because the launcher could not
+obtain it. On first run `bin/cortex-git-launch.sh` fetches the prebuilt
+`cortex-git-server` for the version in `bin/VERSION` from the matching GitHub
+release; if that release (or its asset) isn't published, the download 404s and
+the server exits before registering any tools. The launcher prints the URL it
+tried on failure.
+
+- **Installed from a source checkout or from `main`** - build the binary locally.
+  The launcher prefers a local build over the download, so this takes effect
+  immediately:
+
+  ```shell
+  cd mcp/git-server && make build   # needs Go; produces bin/cortex-git-server
+  ```
+
+  Then reload the plugin (`/reload-plugins`, or restart the session).
+- **Installed a released version** - pick a version whose release assets exist,
+  or report it if the tag in `bin/VERSION` has no published release.
 
 ### `no credentials found for <host> - run set_credentials first`
 
