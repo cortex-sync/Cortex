@@ -144,3 +144,6 @@ they agree with the tag:
 Then commit, `git tag -a vX.Y.Z -m ...`, and push the tag. The release workflow
 runs e2e, then goreleaser (binaries + `checksums.txt`), then packs and attaches
 the `.mcpb` desktop-extension bundles (one per target via `make mcpb-all`).
+
+For the full pre-tag and post-release checklist, see
+[docs/RELEASING.md](docs/RELEASING.md).
