@@ -101,36 +101,7 @@ in CONTRIBUTING for the build (`make build` / `make build-all`) and run steps.
 - [Security](SECURITY.md) - credential storage, PAT handling, reporting issues
 - [Contributing](CONTRIBUTING.md) - workflow, style, test, and security rules
 - [Design document](docs/design.md) - full architecture and decision log
-- [Code signing](docs/CODE_SIGNING.md) - signing approach and SignPath Foundation readiness
 - [Open items](docs/TODO.md) - what's still to do
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by
-[SignPath Foundation](https://signpath.org).
-
-Cortex's Windows release artifacts (the `cortex-git-server` executable and the
-`.mcpb` desktop-extension bundles) are signed with a certificate issued to the
-SignPath Foundation, so the publisher shows as "SignPath Foundation". Signing runs
-in the release pipeline on tagged releases; every artifact is also listed in
-`checksums.txt`, and the launcher verifies each downloaded binary's SHA-256
-(fail-closed) before running it.
-
-**Roles**
-
-- **Author / committer:** [Lucas Symons](https://github.com/LucasSymons)
-- **Reviewer:** [Lucas Symons](https://github.com/LucasSymons)
-- **Approver:** [Lucas Symons](https://github.com/LucasSymons)
-
-Cortex is maintained by a single author; the roles are separated here per the
-signing policy and will be assigned to distinct maintainers as the team grows.
-
-**Privacy policy**
-
-Cortex collects, transmits, and stores no personal data. It runs locally and
-communicates only with the Git host you configure, using credentials you supply;
-nothing is sent elsewhere. The signing pipeline processes only the released build
-artifacts.
 
 ## License
 
