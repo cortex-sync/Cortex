@@ -74,6 +74,17 @@ first. When adopting, the repo's own files are the source of truth: treat existi
 `memory/` files and `CLAUDE.md` as content to keep, exactly like the import case above -
 do not overwrite them with empty templates.
 
+**The reconcile case (the one `setup` does not resolve on its own).** If an existing local
+instruction file was found in the "Existing profile file" check above *and* the remote repo
+already has content, the two must be **merged, not gap-filled**: the adopt path treats the
+repo as the sole source of truth, so it would silently drop the local file's unique rules.
+Route this combination to `restore-profile`'s **Reconcile an existing local profile**
+procedure (clone the repo, 2-way merge the local file against the repo's `CLAUDE.md` with
+the user adjudicating conflicts, then land the merged result both at the destination and
+back in the repo). Then skip the generate / gap-fill / publish steps below - the reconcile
+already placed and pushed the profile. `restore-profile` is the single home for the merge
+logic; `setup` just forks to it.
+
 ---
 
 ## Section 1 - Identity
