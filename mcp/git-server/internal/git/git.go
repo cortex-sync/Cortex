@@ -236,6 +236,7 @@ func InitAndPush(ctx context.Context, localPath, remoteURL, message, username, t
 	// or an http - host would receive the credential resolved for remoteURL's
 	// host. When the remote already exists, require it to be https and to resolve
 	// to remoteURL's host before pushing; a mismatch fails closed.
+	originExisted := false
 	if _, err := repo.CreateRemote(&config.RemoteConfig{
 		Name: "origin",
 		URLs: []string{remoteURL},
@@ -243,8 +244,22 @@ func InitAndPush(ctx context.Context, localPath, remoteURL, message, username, t
 		if !errors.Is(err, gogit.ErrRemoteExists) {
 			return "", fmt.Errorf("adding origin remote: %w", err)
 		}
+		originExisted = true
 		if err := requireOriginMatches(repo, remoteURL); err != nil {
 			return "", err
+		}
+	}
+
+	// If we added the origin ourselves but the repo already carries commit
+	// history, this is a pre-existing repository Cortex did not create - a repo it
+	// created always has its profile origin set, and would be handled by the
+	// requireOriginMatches branch above. Refuse to adopt a foreign repo: the
+	// stage-everything commit below would otherwise push whatever it contains to
+	// the profile remote with the profile PAT. A genuine first run initialises a
+	// fresh directory, which has no HEAD at this point.
+	if !originExisted {
+		if _, err := repo.Head(); err == nil {
+			return "", fmt.Errorf("refusing to reuse the existing repository at %s: it has commit history but no matching origin remote, so Cortex will not adopt it and push its contents", localPath)
 		}
 	}
 

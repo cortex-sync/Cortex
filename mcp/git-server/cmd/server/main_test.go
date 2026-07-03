@@ -197,6 +197,7 @@ func TestHTTPSGuardRejectsInsecureURLs(t *testing.T) {
 // TestGitStatusHandler exercises the handler -> git package wiring and its
 // error mapping, without re-testing git logic covered in the git package.
 func TestGitStatusHandler(t *testing.T) {
+	allowTempPaths(t)
 	res := call(t, gitStatusHandler, map[string]interface{}{
 		"repo_path": filepath.Join(t.TempDir(), "not-a-repo"),
 	})

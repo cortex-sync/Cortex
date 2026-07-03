@@ -241,6 +241,41 @@ func TestInitAndPushRejectsMismatchedExistingOrigin(t *testing.T) {
 	}
 }
 
+// TestInitAndPushRejectsForeignExistingRepo is the regression guard for the M1
+// git_init finding: InitAndPush reuses a pre-existing repo and stages everything
+// in it. A repo with commit history but no matching origin is not one Cortex
+// created, so adopting it and pushing its contents to the profile remote (with
+// the profile PAT) must be refused before any staging or network access.
+func TestInitAndPushRejectsForeignExistingRepo(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	// Give the repo commit history but no origin remote.
+	writeFile(t, dir, "unrelated.txt", "not a profile\n")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	if _, err := wt.Add("unrelated.txt"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := wt.Commit("pre-existing history", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "x", Email: "x@example.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	_, err = InitAndPush(context.Background(), dir, "https://gitlab.com/u/r.git", "cortex: initial", "u", "t")
+	if err == nil {
+		t.Fatal("InitAndPush on a foreign repo with history = nil, want error (must fail closed)")
+	}
+	if !strings.Contains(err.Error(), "refusing to reuse") {
+		t.Fatalf("error = %v, want it to mention 'refusing to reuse'", err)
+	}
+}
+
 // TestInitAndPushNothingToCommit verifies the guard fires before any network
 // access when local_path has no files to commit.
 func TestInitAndPushNothingToCommit(t *testing.T) {
