@@ -60,10 +60,11 @@ func registerTools(s *server.MCPServer) {
 		mcp.WithString("message", mcp.Required(), mcp.Description("Commit message")),
 	), gitCommitPushHandler)
 
-	// git_pull - pull latest from remote (last-write-wins)
+	// git_pull - pull latest from remote (safe fast-forward by default; force = last-write-wins)
 	s.AddTool(mcp.NewTool("git_pull",
-		mcp.WithDescription("Pull latest changes from the remote, force-updating the local branch (last-write-wins)"),
+		mcp.WithDescription("Pull the latest changes from the remote. Safe by default: it fast-forwards a clean repo and refuses if the pull would discard uncommitted changes or unpushed local commits. Set force to true to overwrite them (last-write-wins) - only when the user has chosen to discard local work."),
 		mcp.WithString("repo_path", mcp.Required(), mcp.Description("Absolute path to the local profile repo")),
+		mcp.WithBoolean("force", mcp.Description("Discard local uncommitted changes and diverging commits, resetting to origin (last-write-wins). Default false: a pull that would lose local work is refused instead.")),
 	), gitPullHandler)
 
 	// git_clone - clone a remote repo to a local path
@@ -137,6 +138,12 @@ func gitOpContext(ctx context.Context) (context.Context, context.CancelFunc) {
 // arguments are enforced by the tool schema before a handler runs.
 func stringArg(req mcp.CallToolRequest, name string) string {
 	v, _ := req.Params.Arguments[name].(string)
+	return v
+}
+
+// boolArg returns the named boolean argument, or false if absent or not a bool.
+func boolArg(req mcp.CallToolRequest, name string) bool {
+	v, _ := req.Params.Arguments[name].(bool)
 	return v
 }
 
@@ -217,7 +224,7 @@ func gitPullHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 
 	ctx, cancel := gitOpContext(ctx)
 	defer cancel()
-	result, err := igit.Pull(ctx, repoPath, username, token)
+	result, err := igit.Pull(ctx, repoPath, username, token, boolArg(req, "force"))
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

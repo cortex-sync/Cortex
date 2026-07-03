@@ -196,7 +196,9 @@ Decide the local profile repo path first (default: `~/cortex-profile`). All gene
   remote) - the repo's own files are the source of truth. **Do this preparation step
   before generating anything:** store the PAT now with `set_credentials` (step 6 brought
   forward), then make sure the repo is on disk and current - if there is no local clone
-  yet, `git_clone` it; if it is already cloned, `git_pull` to get the latest. Only then
+  yet, `git_clone` it; if it is already cloned, `git_pull` (unforced) to get the latest - it
+  fast-forwards a clean clone and refuses rather than discarding local changes, so if it
+  refuses, resolve the divergence with the user before forcing. Only then
   generate, and **only fill genuine gaps** - never overwrite an existing `CLAUDE.md` or
   `memory/`/`adapters/` file with an empty template (same rule as the Section 0 import).
   Then publish with `git_commit_push`, not `git_init`.

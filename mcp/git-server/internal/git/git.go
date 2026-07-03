@@ -126,18 +126,22 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 	return fmt.Sprintf("committed and pushed: %s", commit.String()), nil
 }
 
-// Pull force-updates the current branch to origin's tip: last-write-wins. The
-// remote always wins - any diverging local commits AND any uncommitted local
-// changes are discarded. This is deliberate for a profile sync (the source of
-// truth is the remote), but it is destructive, so callers must treat it as such.
+// Pull updates the current branch to origin's tip. By default it is safe: it
+// fast-forwards a clean worktree and refuses when the reset would discard work -
+// a dirty worktree (uncommitted changes) or a local branch that has diverged
+// from origin (unpushed commits). Pass force to get the destructive
+// last-write-wins behaviour: the remote always wins, discarding any diverging
+// local commits AND any uncommitted changes. Last-write-wins is the profile-sync
+// resolution for a genuinely diverged two-device history, but it destroys local
+// work, so it must be an explicit choice rather than the default.
 //
 // It cannot use go-git's PullContext: in go-git v5, PullOptions.Force only
 // affects the fetch, while PullContext still rejects a non-fast-forward update
 // (ErrNonFastForwardUpdate) and aborts on a dirty worktree - which is exactly
-// the diverged two-device case this is meant to resolve. So we fetch the branch
+// the diverged two-device case force is meant to resolve. So we fetch the branch
 // into a remote-tracking ref and hard-reset onto it. The fetch honours ctx, so a
 // hung network operation can be cancelled or timed out by the caller.
-func Pull(ctx context.Context, repoPath, username, token string) (string, error) {
+func Pull(ctx context.Context, repoPath, username, token string, force bool) (string, error) {
 	repo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("opening repo: %w", err)
@@ -180,12 +184,51 @@ func Pull(ctx context.Context, repoPath, username, token string) (string, error)
 		return "already up to date", nil
 	}
 
+	// Unless forced, refuse to discard local work. The hard reset below overwrites
+	// the worktree and moves the branch to origin's tip, so it is only
+	// loss-free when the worktree is clean AND the local branch is strictly behind
+	// origin (a fast-forward). A dirty worktree or a diverging local commit means
+	// the reset would destroy uncommitted or unpushed work: stop and let the
+	// caller resolve it, or opt in to the last-write-wins reset via force.
+	if !force {
+		status, err := wt.Status()
+		if err != nil {
+			return "", fmt.Errorf("getting status: %w", err)
+		}
+		if !status.IsClean() {
+			return "", fmt.Errorf("refusing to pull: the worktree at %s has uncommitted changes a pull would discard - commit or discard them first, or force the pull to overwrite them (last-write-wins)", repoPath)
+		}
+		fastForward, err := isAncestor(repo, head.Hash(), remoteRef.Hash())
+		if err != nil {
+			return "", fmt.Errorf("checking whether the pull is a fast-forward: %w", err)
+		}
+		if !fastForward {
+			return "", fmt.Errorf("refusing to pull: the local branch %s has commits that are not on origin, which a pull would discard - push them first, or force the pull to overwrite them (last-write-wins)", branch)
+		}
+	}
+
 	// Hard reset moves the current branch to origin's tip and overwrites the
 	// index and worktree (see setHEADCommit + HardReset in go-git): remote wins.
 	if err := wt.Reset(&gogit.ResetOptions{Mode: gogit.HardReset, Commit: remoteRef.Hash()}); err != nil {
 		return "", fmt.Errorf("resetting to origin/%s: %w", branch, err)
 	}
 	return fmt.Sprintf("pulled latest changes (reset to origin/%s)", branch), nil
+}
+
+// isAncestor reports whether commit a is an ancestor of commit b - i.e. moving
+// the branch from a to b is a fast-forward that discards no local history. Used
+// by Pull to distinguish a safe fast-forward from a divergence that a reset would
+// destroy.
+func isAncestor(repo *gogit.Repository, a, b plumbing.Hash) (bool, error) {
+	ca, err := repo.CommitObject(a)
+	if err != nil {
+		return false, fmt.Errorf("resolving commit %s: %w", a.String(), err)
+	}
+	cb, err := repo.CommitObject(b)
+	if err != nil {
+		return false, fmt.Errorf("resolving commit %s: %w", b.String(), err)
+	}
+	return ca.IsAncestor(cb)
 }
 
 // Clone clones a remote repo to the given local path. The clone honours ctx, so
