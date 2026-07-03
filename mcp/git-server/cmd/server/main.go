@@ -165,7 +165,11 @@ func resolveCreds(host string) (username, token string, errResult *mcp.CallToolR
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 func gitStatusHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	status, err := igit.Status(stringArg(req, "repo_path"))
+	repoPath, errResult := confinedPathArg(req, "repo_path")
+	if errResult != nil {
+		return errResult, nil
+	}
+	status, err := igit.Status(repoPath)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -173,7 +177,10 @@ func gitStatusHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 }
 
 func gitCommitPushHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	repoPath := stringArg(req, "repo_path")
+	repoPath, errResult := confinedPathArg(req, "repo_path")
+	if errResult != nil {
+		return errResult, nil
+	}
 
 	host, err := igit.RemoteHost(repoPath)
 	if err != nil {
@@ -194,7 +201,10 @@ func gitCommitPushHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 }
 
 func gitPullHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	repoPath := stringArg(req, "repo_path")
+	repoPath, errResult := confinedPathArg(req, "repo_path")
+	if errResult != nil {
+		return errResult, nil
+	}
 
 	host, err := igit.RemoteHost(repoPath)
 	if err != nil {
@@ -221,6 +231,10 @@ func gitCloneHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	localPath, errResult := confinedPathArg(req, "local_path")
+	if errResult != nil {
+		return errResult, nil
+	}
 	username, token, errResult := resolveCreds(host)
 	if errResult != nil {
 		return errResult, nil
@@ -228,7 +242,7 @@ func gitCloneHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 
 	ctx, cancel := gitOpContext(ctx)
 	defer cancel()
-	result, err := igit.Clone(ctx, remoteURL, stringArg(req, "local_path"), username, token)
+	result, err := igit.Clone(ctx, remoteURL, localPath, username, token)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -242,6 +256,10 @@ func gitInitHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	localPath, errResult := confinedPathArg(req, "local_path")
+	if errResult != nil {
+		return errResult, nil
+	}
 	username, token, errResult := resolveCreds(host)
 	if errResult != nil {
 		return errResult, nil
@@ -249,7 +267,7 @@ func gitInitHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 
 	ctx, cancel := gitOpContext(ctx)
 	defer cancel()
-	result, err := igit.InitAndPush(ctx, stringArg(req, "local_path"), remoteURL, stringArg(req, "message"), username, token)
+	result, err := igit.InitAndPush(ctx, localPath, remoteURL, stringArg(req, "message"), username, token)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
