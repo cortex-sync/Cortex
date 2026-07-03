@@ -140,6 +140,107 @@ func TestRemoteHostRejectsInsecureOrigin(t *testing.T) {
 	}
 }
 
+// TestRemoteHostRejectsMultiURLOrigin is the regression guard for the multi-URL
+// origin finding: go-git pushes to the LAST configured origin URL (URLs[len-1])
+// while fetching from the first, so validating only URLs[0] would let an origin
+// whose second URL is an attacker/http host pass the gate and then leak the PAT
+// on push. RemoteHost must reject any origin whose URLs are not all the same
+// https host.
+func TestRemoteHostRejectsMultiURLOrigin(t *testing.T) {
+	cases := []struct {
+		name string
+		urls []string
+	}{
+		{"http push URL behind an https fetch URL", []string{"https://gitlab.com/u/r.git", "http://attacker/u/r.git"}},
+		{"divergent https hosts", []string{"https://gitlab.com/u/r.git", "https://attacker.com/u/r.git"}},
+		{"userinfo in the second URL", []string{"https://gitlab.com/u/r.git", "https://user:glpat-secret@gitlab.com/u/r.git"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			repo, err := gogit.PlainInit(dir, false)
+			if err != nil {
+				t.Fatalf("init: %v", err)
+			}
+			if _, err := repo.CreateRemote(&config.RemoteConfig{
+				Name: "origin",
+				URLs: c.urls,
+			}); err != nil {
+				t.Fatalf("create remote: %v", err)
+			}
+			if host, err := RemoteHost(dir); err == nil {
+				t.Fatalf("RemoteHost(%v) = %q, want error (must fail closed)", c.urls, host)
+			}
+		})
+	}
+
+	// A multi-URL origin that resolves to a single https host is legitimate and
+	// must still be accepted, so the guard above is not over-strict.
+	t.Run("same https host twice is accepted", func(t *testing.T) {
+		dir := t.TempDir()
+		repo, err := gogit.PlainInit(dir, false)
+		if err != nil {
+			t.Fatalf("init: %v", err)
+		}
+		if _, err := repo.CreateRemote(&config.RemoteConfig{
+			Name: "origin",
+			URLs: []string{"https://gitlab.com/u/r.git", "https://gitlab.com/mirror/r.git"},
+		}); err != nil {
+			t.Fatalf("create remote: %v", err)
+		}
+		host, err := RemoteHost(dir)
+		if err != nil {
+			t.Fatalf("RemoteHost: %v", err)
+		}
+		if host != "gitlab.com" {
+			t.Fatalf("RemoteHost = %q, want gitlab.com", host)
+		}
+	})
+}
+
+// TestInitAndPushRejectsMismatchedExistingOrigin is the regression guard for the
+// git_init misdirection finding: InitAndPush reuses a pre-existing repo, and
+// CreateRemote is a no-op when origin already exists, so the caller-supplied
+// remoteURL is ignored and go-git pushes to the recorded origin. If that origin
+// points at another (or an http) host, the PAT resolved for remoteURL's host
+// would be sent there. InitAndPush must refuse before committing or pushing.
+func TestInitAndPushRejectsMismatchedExistingOrigin(t *testing.T) {
+	cases := []struct {
+		name           string
+		existingOrigin string
+	}{
+		{"http origin would leak the PAT in cleartext", "http://attacker.invalid/u/r.git"},
+		{"different https host would misdirect the PAT", "https://attacker.invalid/u/r.git"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			repo, err := gogit.PlainInit(dir, false)
+			if err != nil {
+				t.Fatalf("init: %v", err)
+			}
+			if _, err := repo.CreateRemote(&config.RemoteConfig{
+				Name: "origin",
+				URLs: []string{c.existingOrigin},
+			}); err != nil {
+				t.Fatalf("create remote: %v", err)
+			}
+			writeFile(t, dir, "CLAUDE.md", "v1\n")
+
+			// Unreachable request host: if the gate failed open the push would
+			// fail on the network, so a synchronous "refusing" error proves the
+			// origin mismatch was caught before any credential left the process.
+			_, err = InitAndPush(context.Background(), dir, "https://gitlab.com/u/r.git", "cortex: initial", "u", "t")
+			if err == nil {
+				t.Fatalf("InitAndPush with existing origin %q = nil, want error (must fail closed)", c.existingOrigin)
+			}
+			if !strings.Contains(err.Error(), "refusing") && !strings.Contains(err.Error(), "not usable") {
+				t.Fatalf("error = %v, want it to explain the origin mismatch", err)
+			}
+		})
+	}
+}
+
 // TestInitAndPushNothingToCommit verifies the guard fires before any network
 // access when local_path has no files to commit.
 func TestInitAndPushNothingToCommit(t *testing.T) {

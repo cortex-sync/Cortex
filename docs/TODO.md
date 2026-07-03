@@ -30,7 +30,8 @@ survived. Highest-leverage cluster first.
 
 ### Credential misdirection (NEW - not covered by M1/M2/store-key; do as one host/URL-validation pass)
 
-- [ ] **(high) `git_init` on a pre-existing repo pushes to the OLD origin, sending
+- [x] **(done 2026-07-03, branch `fix/origin-url-validation`) (high) `git_init` on a
+      pre-existing repo pushes to the OLD origin, sending
       the wrong host's PAT to an unvalidated URL.** `internal/git/git.go:232-237`
       tolerates `gogit.ErrRemoteExists` without checking the existing origin URL, then
       pushes to the default "origin" (`git.go:269`) - whatever is in `.git/config` -
@@ -42,7 +43,8 @@ survived. Highest-leverage cluster first.
       existing origin URL to equal `remoteURL` (or pass it through `RequireHTTPS` and
       require host equality with the resolved credential host); error otherwise.
       Bundle with M1's "refuse non-empty pre-existing dir".
-- [ ] **(high) `RemoteHost` validates `URLs[0]` but go-git pushes to the LAST URL of a
+- [x] **(done 2026-07-03, branch `fix/origin-url-validation`) (high) `RemoteHost`
+      validates `URLs[0]` but go-git pushes to the LAST URL of a
       multi-URL origin.** `git.go:302` returns `RequireHTTPS(urls[0])`; go-git v5.19.1
       uses `URLs[0]` for fetch but `URLs[len-1]` for push (verified against module
       source). An origin with URLs `["https://gitlab.com/...", "http://attacker/..."]`
