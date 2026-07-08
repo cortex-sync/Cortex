@@ -32,13 +32,13 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           # Keep in step with GOLANGCI_LINT_VERSION in mcp/git-server/Makefile.
           version: v2.12.2
           working-directory: mcp/git-server
       - name: golangci-lint (e2e tag)
-        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.12.2
           working-directory: mcp/git-server
@@ -139,7 +139,7 @@ jobs:
         # always(): publish the findings even when the gate above failed, so the
         # alerts show up in the Security tab rather than only in the run log.
         if: always()
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: mcp/git-server/results.sarif
           category: gosec
