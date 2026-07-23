@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "cortex-git": {
-      "command": "${CLAUDE_PLUGIN_ROOT:-.}/bin/cortex-git-launch.sh",
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/cortex-git-launch.sh",
       "args": [],
       "env": {}
     }

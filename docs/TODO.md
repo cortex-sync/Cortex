@@ -24,13 +24,29 @@ Open items, grouped by theme. Each becomes a branch + PR.
 From a real `/sync-profile` - full write-up in
 [`docs/notes/2026-07-06-stdio-drive-and-pat-friction.md`](notes/2026-07-06-stdio-drive-and-pat-friction.md).
 
-- **cortex-git tools never reached the session** despite a healthy v0.2.0 binary
-  (verified via `--prefetch` + a direct MCP `initialize`). `/reload-plugins`
-  counted the server but no process ran; reinstall + full restart did not fix it.
-  Suspect `.mcp.json`'s `${CLAUDE_PLUGIN_ROOT:-.}/bin/...` default-form expansion
-  or a fast silent exit. **Do:** confirm host expansion of `${CLAUDE_PLUGIN_ROOT:-.}`
-  (drop the `:-.` if unsupported); make the launcher log startup/exit; add a
-  self-test; document the stdio-drive fallback in `usage.md`.
+- [x] **(done - root cause identified, Cortex-side mitigations shipped)
+      cortex-git tools never reached the session** despite a healthy v0.2.0
+      binary (verified via `--prefetch` + a direct MCP `initialize`).
+      `/reload-plugins` counted the server but no process ran; reinstall + full
+      restart did not fix it. **Root cause confirmed:** a known Claude Code bug,
+      not a Cortex bug - environment-variable expansion in a plugin-**root**
+      `.mcp.json` can fail and be read as a literal string
+      ([anthropics/claude-code#9427](https://github.com/anthropics/claude-code/issues/9427)),
+      matching the observed `ENOENT`-shaped symptom exactly; Cortex cannot fix a
+      host-side bug, only mitigate around it. Shipped: `.mcp.json`'s
+      `${CLAUDE_PLUGIN_ROOT:-.}` simplified to plain `${CLAUDE_PLUGIN_ROOT}` (the
+      launcher already has its own root-fallback, so the shell-default form in
+      `.mcp.json` was redundant and, if expansion partially misbehaves, resolves
+      to an unpredictable `./bin/...` rather than failing loudly); the launcher
+      now logs startup/exit (and every fetch/error step) to both stderr and a
+      rotating `${CLAUDE_PLUGIN_DATA}/launcher.log`, so a run Claude Code never
+      surfaces still leaves a trail; a new `--selftest` flag sends a synthetic
+      MCP `initialize` over stdio and reports PASS/FAIL, isolating "is the
+      binary/launcher fine" from "is Claude Code spawning it" in one command;
+      the stdio-drive fallback is documented in `docs/usage.md` Troubleshooting.
+      Regression tests added to `scripts/test-launcher.sh` (self-test pass/fail
+      against fixture binaries, log-file creation). **Not closeable by
+      Cortex:** the underlying host bug itself - track anthropics/claude-code#9427.
 - **Expired PAT gave an opaque failure + awkward rotation.** Push failed with the
   raw provider `Access denied` message; `get_auth_status` confirms a credential
   *exists* but not that it is valid/unexpired. With the MCP tools not exposed,
