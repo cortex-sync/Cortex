@@ -16,11 +16,14 @@ package keychain
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/cortex-sync/Cortex/mcp/git-server/internal/hostcanon"
 )
 
 // service is the keychain service name all Cortex secrets live under.
@@ -92,17 +95,35 @@ func Backend() string {
 	return backend().kind()
 }
 
-// SetCredentials stores a username and PAT for the given host.
+// SetCredentials stores a username and PAT for the given host. host is
+// canonicalised (see hostcanon.Canonicalize) before it becomes the store key,
+// so the same effective host always resolves to the same entry regardless of
+// case, a trailing FQDN dot, an explicit port, or its Unicode/punycode form -
+// matching how GetCredentials and DeleteCredentials key their lookups.
 func SetCredentials(host, username, token string) error {
-	return backend().Set(host, username, token)
+	key, err := hostcanon.Canonicalize(host)
+	if err != nil {
+		return fmt.Errorf("cannot store credentials: %w", err)
+	}
+	return backend().Set(key, username, token)
 }
 
-// GetCredentials retrieves the username and PAT for the given host.
+// GetCredentials retrieves the username and PAT for the given host, keyed on
+// its canonical form (see hostcanon.Canonicalize).
 func GetCredentials(host string) (username, token string, err error) {
-	return backend().Get(host)
+	key, err := hostcanon.Canonicalize(host)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot resolve credentials: %w", err)
+	}
+	return backend().Get(key)
 }
 
-// DeleteCredentials removes stored credentials for the given host.
+// DeleteCredentials removes stored credentials for the given host, keyed on
+// its canonical form (see hostcanon.Canonicalize).
 func DeleteCredentials(host string) error {
-	return backend().Delete(host)
+	key, err := hostcanon.Canonicalize(host)
+	if err != nil {
+		return fmt.Errorf("cannot delete credentials: %w", err)
+	}
+	return backend().Delete(key)
 }

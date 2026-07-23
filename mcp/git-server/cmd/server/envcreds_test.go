@@ -48,6 +48,21 @@ func TestEnvCredentialsHostMatchIgnoresTrailingDot(t *testing.T) {
 	}
 }
 
+func TestEnvCredentialsHostMatchIgnoresPort(t *testing.T) {
+	// A repo remote on a non-default port resolves to a bare hostname (see
+	// RequireHTTPS/hostcanon.Canonicalize); an env token scoped without a port
+	// must still apply, and vice versa.
+	setEnvCreds(t, "git.example.com", "lsymons", "glpat-test")
+	if _, _, ok := envCredentials("git.example.com:8443"); !ok {
+		t.Fatal("expected a ported lookup host to match an env host with no port")
+	}
+
+	setEnvCreds(t, "git.example.com:8443", "lsymons", "glpat-test")
+	if _, _, ok := envCredentials("git.example.com"); !ok {
+		t.Fatal("expected an env host with a port to match a bare lookup host")
+	}
+}
+
 func TestEnvCredentialsUsernameDefaults(t *testing.T) {
 	t.Setenv("CORTEX_GIT_HOST", "gitlab.com")
 	t.Setenv("CORTEX_GIT_TOKEN", "glpat-test")

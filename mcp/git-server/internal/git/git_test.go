@@ -20,27 +20,62 @@ func TestRequireHTTPS(t *testing.T) {
 		name    string
 		url     string
 		wantErr bool
+		// wantHost is checked only when wantErr is false.
+		wantHost string
 	}{
-		{"https", "https://gitlab.com/user/repo.git", false},
-		{"https with port", "https://git.example.com:8443/u/r.git", false},
-		{"http rejected", "http://gitlab.com/user/repo.git", true},
-		{"ssh scheme rejected", "ssh://git@gitlab.com/user/repo.git", true},
-		{"git scheme rejected", "git://gitlab.com/user/repo.git", true},
-		{"file scheme rejected", "file:///tmp/repo.git", true},
-		{"scp-style rejected", "git@gitlab.com:user/repo.git", true},
-		{"bare path rejected", "/local/path/repo", true},
-		{"empty rejected", "", true},
-		{"userinfo with token rejected", "https://user:glpat-secret@gitlab.com/u/r.git", true},
-		{"userinfo username-only rejected", "https://user@gitlab.com/u/r.git", true},
+		{"https", "https://gitlab.com/user/repo.git", false, "gitlab.com"},
+		{"https with port", "https://git.example.com:8443/u/r.git", false, "git.example.com"},
+		{"http rejected", "http://gitlab.com/user/repo.git", true, ""},
+		{"ssh scheme rejected", "ssh://git@gitlab.com/user/repo.git", true, ""},
+		{"git scheme rejected", "git://gitlab.com/user/repo.git", true, ""},
+		{"file scheme rejected", "file:///tmp/repo.git", true, ""},
+		{"scp-style rejected", "git@gitlab.com:user/repo.git", true, ""},
+		{"bare path rejected", "/local/path/repo", true, ""},
+		{"empty rejected", "", true, ""},
+		{"userinfo with token rejected", "https://user:glpat-secret@gitlab.com/u/r.git", true, ""},
+		{"userinfo username-only rejected", "https://user@gitlab.com/u/r.git", true, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := RequireHTTPS(c.url)
+			host, err := RequireHTTPS(c.url)
 			if c.wantErr && err == nil {
 				t.Fatalf("RequireHTTPS(%q) = nil, want error", c.url)
 			}
-			if !c.wantErr && err != nil {
-				t.Fatalf("RequireHTTPS(%q) unexpected error: %v", c.url, err)
+			if !c.wantErr {
+				if err != nil {
+					t.Fatalf("RequireHTTPS(%q) unexpected error: %v", c.url, err)
+				}
+				if host != c.wantHost {
+					t.Fatalf("RequireHTTPS(%q) host = %q, want %q", c.url, host, c.wantHost)
+				}
+			}
+		})
+	}
+}
+
+// TestRequireHTTPSCanonicalisesHost is the regression guard for the
+// store/resolve host-key mismatch: RequireHTTPS must return the same
+// canonical host (see hostcanon.Canonicalize) regardless of the URL's case,
+// an explicit port, or a trailing FQDN root dot in the host component - this
+// is the key resolveCreds looks up in the credential store, which keys on the
+// same normalisation.
+func TestRequireHTTPSCanonicalisesHost(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"mixed case", "https://GitLab.com/u/r.git"},
+		{"upper case with port", "https://GITLAB.COM:443/u/r.git"},
+		{"trailing FQDN dot", "https://gitlab.com./u/r.git"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			host, err := RequireHTTPS(c.url)
+			if err != nil {
+				t.Fatalf("RequireHTTPS(%q): unexpected error: %v", c.url, err)
+			}
+			if host != "gitlab.com" {
+				t.Fatalf("RequireHTTPS(%q) host = %q, want the canonical form %q", c.url, host, "gitlab.com")
 			}
 		})
 	}
