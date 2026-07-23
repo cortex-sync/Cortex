@@ -130,3 +130,47 @@ func TestGitStatusHandlerConfinesPath(t *testing.T) {
 		t.Fatalf("error = %q, want it to mention 'outside the permitted root'", txt)
 	}
 }
+
+// TestNetworkHandlersConfinePath extends the git_status regression guard above
+// to the four network handlers wired to path confinement (M1): commit_push and
+// pull (repo_path), clone and init (local_path) must all reject a path outside
+// the confinement root before any repo or network access - not just git_status.
+func TestNetworkHandlersConfinePath(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CORTEX_REPO_ROOT", root)
+	outside := t.TempDir() // sibling temp dir, outside root
+
+	cases := []struct {
+		name string
+		h    handler
+		args map[string]interface{}
+	}{
+		{"commit_push", gitCommitPushHandler, map[string]interface{}{
+			"repo_path": outside,
+			"message":   "m",
+		}},
+		{"pull", gitPullHandler, map[string]interface{}{
+			"repo_path": outside,
+		}},
+		{"clone", gitCloneHandler, map[string]interface{}{
+			"remote_url": "https://confine.example/u/r.git",
+			"local_path": outside,
+		}},
+		{"init", gitInitHandler, map[string]interface{}{
+			"remote_url": "https://confine.example/u/r.git",
+			"local_path": outside,
+			"message":    "m",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := call(t, tc.h, tc.args)
+			if !res.IsError {
+				t.Fatalf("%s outside root: want IsError, got %q", tc.name, resultText(t, res))
+			}
+			if txt := resultText(t, res); !strings.Contains(txt, "outside the permitted root") {
+				t.Fatalf("%s error = %q, want it to mention 'outside the permitted root'", tc.name, txt)
+			}
+		})
+	}
+}

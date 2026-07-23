@@ -276,6 +276,61 @@ func TestInitAndPushRejectsForeignExistingRepo(t *testing.T) {
 	}
 }
 
+// TestInitAndPushRejectsInvalidRemoteURLOnReusedOrigin covers the other half of
+// requireOriginMatches' fail-closed check: a valid, matching pre-existing origin
+// is not enough - remoteURL itself must still be a well-formed https URL, since
+// requireOriginMatches resolves the credential host from remoteURL before
+// comparing it against the existing origin.
+func TestInitAndPushRejectsInvalidRemoteURLOnReusedOrigin(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"https://gitlab.com/u/r.git"},
+	}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+	writeFile(t, dir, "CLAUDE.md", "v1\n")
+
+	_, err = InitAndPush(context.Background(), dir, "not-a-valid-url", "cortex: initial", "u", "t")
+	if err == nil {
+		t.Fatal("InitAndPush with invalid remoteURL on a reused origin = nil, want error (must fail closed)")
+	}
+}
+
+// TestIsAncestorInvalidCommit covers isAncestor's own error paths: an
+// unresolvable commit hash for either side must return an error, not resolve
+// (silently) to "not an ancestor" - Pull relies on this error propagating so it
+// refuses the pull rather than mistaking "can't tell" for "safe to reset".
+func TestIsAncestorInvalidCommit(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := gogit.PlainInit(dir, false); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	writeFile(t, dir, "f.txt", "v1\n")
+	commitLocally(t, dir, "c1")
+
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	bogus := plumbing.NewHash("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+
+	if _, err := isAncestor(repo, bogus, head.Hash()); err == nil {
+		t.Fatal("isAncestor with unresolvable commit a = nil, want error")
+	}
+	if _, err := isAncestor(repo, head.Hash(), bogus); err == nil {
+		t.Fatal("isAncestor with unresolvable commit b = nil, want error")
+	}
+}
+
 // TestInitAndPushNothingToCommit verifies the guard fires before any network
 // access when local_path has no files to commit.
 func TestInitAndPushNothingToCommit(t *testing.T) {
