@@ -241,6 +241,96 @@ func TestInitAndPushRejectsMismatchedExistingOrigin(t *testing.T) {
 	}
 }
 
+// TestInitAndPushRejectsForeignExistingRepo is the regression guard for the M1
+// git_init finding: InitAndPush reuses a pre-existing repo and stages everything
+// in it. A repo with commit history but no matching origin is not one Cortex
+// created, so adopting it and pushing its contents to the profile remote (with
+// the profile PAT) must be refused before any staging or network access.
+func TestInitAndPushRejectsForeignExistingRepo(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	// Give the repo commit history but no origin remote.
+	writeFile(t, dir, "unrelated.txt", "not a profile\n")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	if _, err := wt.Add("unrelated.txt"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := wt.Commit("pre-existing history", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "x", Email: "x@example.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	_, err = InitAndPush(context.Background(), dir, "https://gitlab.com/u/r.git", "cortex: initial", "u", "t")
+	if err == nil {
+		t.Fatal("InitAndPush on a foreign repo with history = nil, want error (must fail closed)")
+	}
+	if !strings.Contains(err.Error(), "refusing to reuse") {
+		t.Fatalf("error = %v, want it to mention 'refusing to reuse'", err)
+	}
+}
+
+// TestInitAndPushRejectsInvalidRemoteURLOnReusedOrigin covers the other half of
+// requireOriginMatches' fail-closed check: a valid, matching pre-existing origin
+// is not enough - remoteURL itself must still be a well-formed https URL, since
+// requireOriginMatches resolves the credential host from remoteURL before
+// comparing it against the existing origin.
+func TestInitAndPushRejectsInvalidRemoteURLOnReusedOrigin(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"https://gitlab.com/u/r.git"},
+	}); err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+	writeFile(t, dir, "CLAUDE.md", "v1\n")
+
+	_, err = InitAndPush(context.Background(), dir, "not-a-valid-url", "cortex: initial", "u", "t")
+	if err == nil {
+		t.Fatal("InitAndPush with invalid remoteURL on a reused origin = nil, want error (must fail closed)")
+	}
+}
+
+// TestIsAncestorInvalidCommit covers isAncestor's own error paths: an
+// unresolvable commit hash for either side must return an error, not resolve
+// (silently) to "not an ancestor" - Pull relies on this error propagating so it
+// refuses the pull rather than mistaking "can't tell" for "safe to reset".
+func TestIsAncestorInvalidCommit(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := gogit.PlainInit(dir, false); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	writeFile(t, dir, "f.txt", "v1\n")
+	commitLocally(t, dir, "c1")
+
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	bogus := plumbing.NewHash("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+
+	if _, err := isAncestor(repo, bogus, head.Hash()); err == nil {
+		t.Fatal("isAncestor with unresolvable commit a = nil, want error")
+	}
+	if _, err := isAncestor(repo, head.Hash(), bogus); err == nil {
+		t.Fatal("isAncestor with unresolvable commit b = nil, want error")
+	}
+}
+
 // TestInitAndPushNothingToCommit verifies the guard fires before any network
 // access when local_path has no files to commit.
 func TestInitAndPushNothingToCommit(t *testing.T) {
@@ -335,8 +425,9 @@ func TestSyncRoundTrip(t *testing.T) {
 		t.Fatalf("CommitAndPush: %v", err)
 	}
 
-	// Device A: pull and confirm it now sees the update.
-	if _, err := Pull(context.Background(), deviceA, "u", "t"); err != nil {
+	// Device A: pull and confirm it now sees the update. Device A is clean and
+	// strictly behind origin, so this is a safe (unforced) fast-forward.
+	if _, err := Pull(context.Background(), deviceA, "u", "t", false); err != nil {
 		t.Fatalf("Pull: %v", err)
 	}
 	if got := readFile(t, deviceA, "CLAUDE.md"); got != "v2\n" {
@@ -404,9 +495,10 @@ func TestPullLastWriteWinsOnDivergence(t *testing.T) {
 	}
 	writeFile(t, deviceA, "CLAUDE.md", "dirty-uncommitted\n") // unstaged change on top
 
-	// Pull must converge on origin despite the divergence and the dirty worktree.
-	if _, err := Pull(context.Background(), deviceA, "u", "t"); err != nil {
-		t.Fatalf("Pull on diverged+dirty history: %v", err)
+	// Forced pull must converge on origin despite the divergence and dirty
+	// worktree - this is the deliberate last-write-wins behaviour.
+	if _, err := Pull(context.Background(), deviceA, "u", "t", true); err != nil {
+		t.Fatalf("forced Pull on diverged+dirty history: %v", err)
 	}
 	if got := readFile(t, deviceA, "CLAUDE.md"); got != "remote-wins\n" {
 		t.Fatalf("after last-write-wins pull, CLAUDE.md = %q, want origin's 'remote-wins'", got)
@@ -512,13 +604,100 @@ func TestPullDiscardsUnpushedLocalCommits(t *testing.T) {
 	writeFile(t, deviceA, "CLAUDE.md", "local-ahead\n")
 	commitLocally(t, deviceA, "cortex: local only")
 
-	// Pull resets to origin, discarding the unpushed local commit.
-	if _, err := Pull(context.Background(), deviceA, "u", "t"); err != nil {
-		t.Fatalf("Pull: %v", err)
+	// Forced pull resets to origin, discarding the unpushed local commit.
+	if _, err := Pull(context.Background(), deviceA, "u", "t", true); err != nil {
+		t.Fatalf("forced Pull: %v", err)
 	}
 	if got := readFile(t, deviceA, "CLAUDE.md"); got != "origin-v1\n" {
 		t.Fatalf("after pull, CLAUDE.md = %q, want origin-v1 (unpushed local commit should be discarded)", got)
 	}
+}
+
+// remoteAheadOfDeviceA sets up a bare remote and a deviceA clone that is clean
+// and strictly behind origin (origin has one extra commit deviceA lacks), so an
+// unforced pull would be a safe fast-forward absent any local divergence/dirt.
+// It returns deviceA's path and origin's head content.
+func remoteAheadOfDeviceA(t *testing.T) (deviceA, remoteContent string) {
+	t.Helper()
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	bare, err := gogit.PlainInit(remote, true)
+	if err != nil {
+		t.Fatalf("init bare remote: %v", err)
+	}
+	headToMain := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main"))
+	if err := bare.Storer.SetReference(headToMain); err != nil {
+		t.Fatalf("set remote HEAD: %v", err)
+	}
+
+	deviceA = filepath.Join(root, "a")
+	if err := os.MkdirAll(deviceA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, deviceA, "CLAUDE.md", "v1\n")
+	if _, err := InitAndPush(context.Background(), deviceA, remote, "cortex: initial", "u", "t"); err != nil {
+		t.Fatalf("InitAndPush: %v", err)
+	}
+
+	// Device B advances origin one commit past deviceA.
+	deviceB := filepath.Join(root, "b")
+	if _, err := Clone(context.Background(), remote, deviceB, "u", "t"); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	remoteContent = "remote-v2\n"
+	writeFile(t, deviceB, "CLAUDE.md", remoteContent)
+	if _, err := CommitAndPush(context.Background(), deviceB, "cortex: B update", "u", "t"); err != nil {
+		t.Fatalf("CommitAndPush B: %v", err)
+	}
+	return deviceA, remoteContent
+}
+
+// TestPullWithoutForceRefusesToDiscard is the regression guard for M2: an
+// unforced pull must refuse rather than silently discard local work - both a
+// dirty worktree and a diverging local commit - while force still performs the
+// last-write-wins reset.
+func TestPullWithoutForceRefusesToDiscard(t *testing.T) {
+	t.Run("dirty worktree", func(t *testing.T) {
+		deviceA, remoteContent := remoteAheadOfDeviceA(t)
+		// An uncommitted edit: a fast-forward is available, but the reset would
+		// discard this change, so an unforced pull must refuse.
+		writeFile(t, deviceA, "CLAUDE.md", "dirty-uncommitted\n")
+
+		if _, err := Pull(context.Background(), deviceA, "u", "t", false); err == nil {
+			t.Fatal("unforced Pull with a dirty worktree = nil, want error")
+		} else if !strings.Contains(err.Error(), "uncommitted") {
+			t.Fatalf("error = %v, want it to mention uncommitted changes", err)
+		}
+
+		// Forced, it converges on origin.
+		if _, err := Pull(context.Background(), deviceA, "u", "t", true); err != nil {
+			t.Fatalf("forced Pull: %v", err)
+		}
+		if got := readFile(t, deviceA, "CLAUDE.md"); got != remoteContent {
+			t.Fatalf("after forced pull CLAUDE.md = %q, want %q", got, remoteContent)
+		}
+	})
+
+	t.Run("diverging local commit", func(t *testing.T) {
+		deviceA, remoteContent := remoteAheadOfDeviceA(t)
+		// A committed local change (clean worktree) that diverges from origin: the
+		// reset would discard the commit, so an unforced pull must refuse.
+		writeFile(t, deviceA, "CLAUDE.md", "local-divergent\n")
+		commitLocally(t, deviceA, "cortex: local only")
+
+		if _, err := Pull(context.Background(), deviceA, "u", "t", false); err == nil {
+			t.Fatal("unforced Pull with a diverging commit = nil, want error")
+		} else if !strings.Contains(err.Error(), "not on origin") {
+			t.Fatalf("error = %v, want it to mention commits not on origin", err)
+		}
+
+		if _, err := Pull(context.Background(), deviceA, "u", "t", true); err != nil {
+			t.Fatalf("forced Pull: %v", err)
+		}
+		if got := readFile(t, deviceA, "CLAUDE.md"); got != remoteContent {
+			t.Fatalf("after forced pull CLAUDE.md = %q, want %q", got, remoteContent)
+		}
+	})
 }
 
 // TestNetworkOpsHonourCanceledContext confirms the network operations thread the
@@ -563,7 +742,7 @@ func TestNetworkOpsHonourCanceledContext(t *testing.T) {
 	}
 
 	// Pull under a canceled context must fail at the fetch.
-	if _, err := Pull(canceled, deviceA, "u", "t"); !errors.Is(err, context.Canceled) {
+	if _, err := Pull(canceled, deviceA, "u", "t", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Pull with canceled ctx: got %v, want context.Canceled", err)
 	}
 }

@@ -162,7 +162,7 @@ survived. Highest-leverage cluster first.
 
 ### Skills - data-loss traps (NEW)
 
-- [ ] **(high) `sync-profile`'s conflict recovery is a guaranteed data-loss recipe.**
+- [x] **(done 2026-07-03, branch `fix/path-confinement-and-pull-gate`) (high) `sync-profile`'s conflict recovery is a guaranteed data-loss recipe.**
       `skills/sync-profile/SKILL.md` Error handling says on push rejection "run `git_pull`
       first, then retry `git_commit_push`". But `CommitPush` commits locally first, and
       `Pull` is fetch + `HardReset` to origin - so the pull discards the just-made commit and
@@ -317,7 +317,7 @@ internal mirror.
 
 ### Git operations / tool surface
 
-- [ ] **M1 (medium) - all path-taking git tools accept arbitrary, unvalidated paths.**
+- [x] **(done 2026-07-03, branch `fix/path-confinement-and-pull-gate`) M1 (medium) - all path-taking git tools accept arbitrary, unvalidated paths.**
       `cmd/server/main.go:168-258`. Model-supplied `repo_path`/`local_path` go straight
       to go-git with no `Clean`/`Abs`, no allowlist, no confinement. A prompt-injection
       can point ops outside scope (`git_status` freely reachable for path disclosure).
@@ -326,7 +326,7 @@ internal mirror.
       `EvalSymlinks` - mirror the `os.Root` confinement already used in `secretscan`.
       `git_init` also reuses an existing repo and stages `All:true` - refuse a
       non-empty pre-existing dir unless it is the expected profile repo.
-- [ ] **M2 (medium) - `git_pull` does a destructive `HardReset` with no gate.**
+- [x] **(done 2026-07-03, branch `fix/path-confinement-and-pull-gate`) M2 (medium) - `git_pull` does a destructive `HardReset` with no gate.**
       `internal/git/git.go:139-188`, invoked at `cmd/server/main.go:197`. Discards
       diverging commits and uncommitted changes onto origin's tip - no confirmation,
       dry-run, or backup. **Fix:** gate the hard reset behind an explicit destructive

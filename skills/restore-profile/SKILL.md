@@ -21,7 +21,7 @@ You are restoring the user's Cortex AI profile to this device from their Git rep
 
 4. Get the repo onto disk at `local_path`. **First check whether `local_path` already exists**, because `git_clone` (go-git `PlainClone`) fails if the directory is already a repo or is non-empty:
    - **Empty or absent** - use `git_clone` with `remote_url` and `local_path`. Credentials are resolved automatically from the store using the host parsed from the URL.
-   - **Already a clone of this repo** (a `.git` is present and its origin matches `remote_url`) - do not clone. Run `git_pull` instead to bring it current, and tell the user you reused the existing clone. Note `git_pull` is last-write-wins (force-updates local) - warn first if they have substantial uncommitted local changes.
+   - **Already a clone of this repo** (a `.git` is present and its origin matches `remote_url`) - do not clone. Run `git_pull` (unforced) to bring it current, and tell the user you reused the existing clone. `git_pull` is safe by default: it fast-forwards a clean clone and **refuses** if the clone has uncommitted or unpushed local changes rather than discarding them. If it refuses, stop and ask the user how to proceed - do not force the pull (last-write-wins - it would discard their local work) without their explicit go-ahead.
    - **Exists but is a different repo, or a non-empty non-repo directory** - stop and ask. Offer a different `local_path` or, if they are sure it is the right repo with local edits, confirm before any pull. Never clobber an unrelated directory.
 
 5. Detect the target AI tool and place the profile. Ask the user to confirm if unsure. What happens next depends on what is already at the destination:

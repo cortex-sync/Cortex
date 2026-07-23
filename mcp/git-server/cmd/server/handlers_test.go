@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,15 @@ import (
 
 	"github.com/cortex-sync/Cortex/mcp/git-server/internal/keychain"
 )
+
+// allowTempPaths points the path-confinement root at the temp-dir base for a
+// test, so the throwaway repos these handler tests create (all under os.TempDir)
+// pass confinement. Confinement itself is exercised in confine_test.go; here it
+// must simply not get in the way of the credential/host/operation gates.
+func allowTempPaths(t *testing.T) {
+	t.Helper()
+	t.Setenv("CORTEX_REPO_ROOT", os.TempDir())
+}
 
 // repoWithRemote initialises a throwaway git repo with an "origin" remote set to
 // remoteURL, so RemoteHost resolves a host without any network access.
@@ -33,6 +43,7 @@ func repoWithRemote(t *testing.T, remoteURL string) string {
 // when the path is not a git repo (or has no origin remote), reporting the
 // host-resolution failure rather than attempting any network operation.
 func TestGitPushPullRemoteHostError(t *testing.T) {
+	allowTempPaths(t)
 	cases := []struct {
 		name string
 		h    handler
@@ -61,6 +72,7 @@ func TestGitPushPullRemoteHostError(t *testing.T) {
 // network call - when no PAT is stored for the target host. Each case uses a
 // distinct host so the shared keyring mock has nothing stored for it.
 func TestGitNetworkHandlersMissingCreds(t *testing.T) {
+	allowTempPaths(t)
 	cases := []struct {
 		name string
 		h    handler
@@ -106,6 +118,7 @@ func TestGitNetworkHandlersMissingCreds(t *testing.T) {
 // flush unpushed commits) so it cannot fail before the network without a fragile
 // setup - its round-trip is covered by the e2e test in CI instead.
 func TestGitNetworkHandlersOperationError(t *testing.T) {
+	allowTempPaths(t)
 	// A local path that is already a git repo makes PlainCloneContext fail with
 	// "repository already exists" before it opens any network connection.
 	existingRepo := repoWithRemote(t, "https://clone.op.example/u/r.git")
