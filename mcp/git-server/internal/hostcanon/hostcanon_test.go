@@ -88,6 +88,7 @@ func TestCanonicalizeRejects(t *testing.T) {
 		{"empty", ""},
 		{"whitespace only", "   "},
 		{"dot only", "."},
+		{"IDNA-invalid label", "-invalid-.com"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -98,6 +98,28 @@ func TestCredentialsKeyIsCanonicalised(t *testing.T) {
 	}
 }
 
+// TestCredentialsRejectUnnormalisableHost covers the fail-closed branch all
+// three entry points share: a host hostcanon.Canonicalize cannot normalise
+// (empty, or one IDNA rejects) must return an error instead of silently
+// falling back to an unnormalised store key.
+func TestCredentialsRejectUnnormalisableHost(t *testing.T) {
+	keyring.MockInit()
+	resetBackend()
+	t.Cleanup(resetBackend)
+
+	for _, host := range []string{"", "-invalid-.com"} {
+		if err := SetCredentials(host, "alice", "token-aaa"); err == nil {
+			t.Fatalf("SetCredentials(%q) = nil, want error", host)
+		}
+		if _, _, err := GetCredentials(host); err == nil {
+			t.Fatalf("GetCredentials(%q) = nil error, want error", host)
+		}
+		if err := DeleteCredentials(host); err == nil {
+			t.Fatalf("DeleteCredentials(%q) = nil, want error", host)
+		}
+	}
+}
+
 // TestConfigDirOverrideForcesFileBackend verifies that CORTEX_CONFIG_DIR pins
 // the encrypted-file backend at the given directory even when a working OS
 // keyring is present, and that the keyring is never written to.

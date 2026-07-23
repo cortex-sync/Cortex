@@ -63,6 +63,23 @@ func TestEnvCredentialsHostMatchIgnoresPort(t *testing.T) {
 	}
 }
 
+// TestEnvCredentialsHostMatchFailsClosedOnUnnormalisableHost covers hostsEqual's
+// fail-closed branch: a host either side cannot IDNA-normalise must never be
+// treated as matching anything, in either direction.
+func TestEnvCredentialsHostMatchFailsClosedOnUnnormalisableHost(t *testing.T) {
+	const invalid = "-invalid-.com"
+
+	setEnvCreds(t, invalid, "lsymons", "glpat-test")
+	if _, _, ok := envCredentials("gitlab.com"); ok {
+		t.Fatal("an unnormalisable env host must not match any lookup host")
+	}
+
+	setEnvCreds(t, "gitlab.com", "lsymons", "glpat-test")
+	if _, _, ok := envCredentials(invalid); ok {
+		t.Fatal("an unnormalisable lookup host must not match any env host")
+	}
+}
+
 func TestEnvCredentialsUsernameDefaults(t *testing.T) {
 	t.Setenv("CORTEX_GIT_HOST", "gitlab.com")
 	t.Setenv("CORTEX_GIT_TOKEN", "glpat-test")

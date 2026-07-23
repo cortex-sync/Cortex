@@ -34,6 +34,7 @@ func TestRequireHTTPS(t *testing.T) {
 		{"empty rejected", "", true, ""},
 		{"userinfo with token rejected", "https://user:glpat-secret@gitlab.com/u/r.git", true, ""},
 		{"userinfo username-only rejected", "https://user@gitlab.com/u/r.git", true, ""},
+		{"IDNA-invalid host rejected", "https://-invalid-.com/u/r.git", true, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
