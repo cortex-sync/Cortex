@@ -137,13 +137,19 @@ they agree with the tag:
 - `.claude-plugin/plugin.json` (`version`, no `v` prefix)
 - `bin/VERSION` (the launcher fetches the binary from this tag's release; keep
   the `v` prefix)
-- `mcpb/manifest.json` (`version`, no `v` prefix) - the release pipeline
-  **fails closed** if this does not match the tag, so the `.mcpb` bundles can't
-  ship mis-versioned.
+- `mcpb/manifest.json` (`version`, no `v` prefix)
+
+The release pipeline **fails closed** on any of the three disagreeing with the
+tag, checked before anything is built or published.
 
 Then commit, `git tag -a vX.Y.Z -m ...`, and push the tag. The release workflow
-runs e2e, then goreleaser (binaries + `checksums.txt`), then packs and attaches
-the `.mcpb` desktop-extension bundles (one per target via `make mcpb-all`).
+runs `e2e` and `verify` (version-file agreement plus CI's full gate set - lint,
+vet, build, test, coverage floor, gosec, govulncheck, gitleaks) before anything
+is built; only then does goreleaser run (binaries + `checksums.txt`, as a
+**draft** release), followed by packing and attaching the `.mcpb`
+desktop-extension bundles (one per target via `make mcpb-all`), and finally
+publishing the release. A failure at any stage leaves a non-public draft
+rather than a live, partial release.
 
 For the full pre-tag and post-release checklist, see
 [docs/RELEASING.md](docs/RELEASING.md).
