@@ -238,6 +238,45 @@ tried on failure.
 - **Installed a released version** - pick a version whose release assets exist,
   or report it if the tag in `bin/VERSION` has no published release.
 
+**The binary itself is fine, but the tools still don't appear.** A different
+(and more confusing) failure mode: `/reload-plugins` reports the server as
+installed, a fresh install/restart doesn't help, but the tools are never
+callable - and the binary turns out to be perfectly healthy. First, isolate
+the binary/launcher from Claude Code's own plugin loading:
+
+```shell
+# from the installed plugin root, or a local checkout
+bin/cortex-git-launch.sh --selftest
+```
+
+This fetches the binary if needed, sends it a synthetic MCP `initialize`, and
+reports PASS/FAIL - if it prints the server's `serverInfo` and exits 0, the
+binary and launcher are both working correctly and the problem is entirely on
+Claude Code's side. Every run (of `--selftest`, `--prefetch`, or a normal
+launch) also appends a timestamped line to `${CLAUDE_PLUGIN_DATA:-~/.cache/cortex}/launcher.log`,
+so a launch that Claude Code never surfaces still leaves a trail - check it if
+`--selftest` passes but tools still don't show up in a real session.
+
+If `--selftest` passes and reloading/restarting still doesn't expose the
+tools, this matches a known Claude Code issue with plugin-root `.mcp.json`
+environment-variable expansion
+([anthropics/claude-code#9427](https://github.com/anthropics/claude-code/issues/9427)) -
+not something Cortex itself can fix. As an emergency fallback, the server can
+be driven directly over stdio (newline-delimited JSON-RPC: `initialize` ->
+`notifications/initialized` -> `tools/call`), using the same binary and
+credential store the MCP tools would use:
+
+```shell
+printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"manual","version":"1"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  | "${CLAUDE_PLUGIN_DATA:-~/.cache/cortex}/bin/cortex-git-server-<version>-<os>-<arch>"
+```
+
+Then pipe further `tools/call` requests the same way. This is a stopgap for an
+unresponsive host, not a fix - once the underlying Claude Code issue is
+resolved, a normal reload should work again.
+
 ### `no credentials found for <host> - run set_credentials first`
 
 No PAT is stored for that host. Run `get_auth_status <host>` to confirm (it also
