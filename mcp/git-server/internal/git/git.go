@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 
+	"github.com/cortex-sync/Cortex/mcp/git-server/internal/hostcanon"
 	"github.com/cortex-sync/Cortex/mcp/git-server/internal/secretscan"
 )
 
@@ -126,18 +127,22 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 	return fmt.Sprintf("committed and pushed: %s", commit.String()), nil
 }
 
-// Pull force-updates the current branch to origin's tip: last-write-wins. The
-// remote always wins - any diverging local commits AND any uncommitted local
-// changes are discarded. This is deliberate for a profile sync (the source of
-// truth is the remote), but it is destructive, so callers must treat it as such.
+// Pull updates the current branch to origin's tip. By default it is safe: it
+// fast-forwards a clean worktree and refuses when the reset would discard work -
+// a dirty worktree (uncommitted changes) or a local branch that has diverged
+// from origin (unpushed commits). Pass force to get the destructive
+// last-write-wins behaviour: the remote always wins, discarding any diverging
+// local commits AND any uncommitted changes. Last-write-wins is the profile-sync
+// resolution for a genuinely diverged two-device history, but it destroys local
+// work, so it must be an explicit choice rather than the default.
 //
 // It cannot use go-git's PullContext: in go-git v5, PullOptions.Force only
 // affects the fetch, while PullContext still rejects a non-fast-forward update
 // (ErrNonFastForwardUpdate) and aborts on a dirty worktree - which is exactly
-// the diverged two-device case this is meant to resolve. So we fetch the branch
+// the diverged two-device case force is meant to resolve. So we fetch the branch
 // into a remote-tracking ref and hard-reset onto it. The fetch honours ctx, so a
 // hung network operation can be cancelled or timed out by the caller.
-func Pull(ctx context.Context, repoPath, username, token string) (string, error) {
+func Pull(ctx context.Context, repoPath, username, token string, force bool) (string, error) {
 	repo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("opening repo: %w", err)
@@ -180,12 +185,51 @@ func Pull(ctx context.Context, repoPath, username, token string) (string, error)
 		return "already up to date", nil
 	}
 
+	// Unless forced, refuse to discard local work. The hard reset below overwrites
+	// the worktree and moves the branch to origin's tip, so it is only
+	// loss-free when the worktree is clean AND the local branch is strictly behind
+	// origin (a fast-forward). A dirty worktree or a diverging local commit means
+	// the reset would destroy uncommitted or unpushed work: stop and let the
+	// caller resolve it, or opt in to the last-write-wins reset via force.
+	if !force {
+		status, err := wt.Status()
+		if err != nil {
+			return "", fmt.Errorf("getting status: %w", err)
+		}
+		if !status.IsClean() {
+			return "", fmt.Errorf("refusing to pull: the worktree at %s has uncommitted changes a pull would discard - commit or discard them first, or force the pull to overwrite them (last-write-wins)", repoPath)
+		}
+		fastForward, err := isAncestor(repo, head.Hash(), remoteRef.Hash())
+		if err != nil {
+			return "", fmt.Errorf("checking whether the pull is a fast-forward: %w", err)
+		}
+		if !fastForward {
+			return "", fmt.Errorf("refusing to pull: the local branch %s has commits that are not on origin, which a pull would discard - push them first, or force the pull to overwrite them (last-write-wins)", branch)
+		}
+	}
+
 	// Hard reset moves the current branch to origin's tip and overwrites the
 	// index and worktree (see setHEADCommit + HardReset in go-git): remote wins.
 	if err := wt.Reset(&gogit.ResetOptions{Mode: gogit.HardReset, Commit: remoteRef.Hash()}); err != nil {
 		return "", fmt.Errorf("resetting to origin/%s: %w", branch, err)
 	}
 	return fmt.Sprintf("pulled latest changes (reset to origin/%s)", branch), nil
+}
+
+// isAncestor reports whether commit a is an ancestor of commit b - i.e. moving
+// the branch from a to b is a fast-forward that discards no local history. Used
+// by Pull to distinguish a safe fast-forward from a divergence that a reset would
+// destroy.
+func isAncestor(repo *gogit.Repository, a, b plumbing.Hash) (bool, error) {
+	ca, err := repo.CommitObject(a)
+	if err != nil {
+		return false, fmt.Errorf("resolving commit %s: %w", a.String(), err)
+	}
+	cb, err := repo.CommitObject(b)
+	if err != nil {
+		return false, fmt.Errorf("resolving commit %s: %w", b.String(), err)
+	}
+	return ca.IsAncestor(cb)
 }
 
 // Clone clones a remote repo to the given local path. The clone honours ctx, so
@@ -228,12 +272,39 @@ func InitAndPush(ctx context.Context, localPath, remoteURL, message, username, t
 		}
 	}
 
-	// Configure origin, tolerating an existing remote.
+	// Configure origin, tolerating a pre-existing remote - but never trust one
+	// blindly. CreateRemote is a silent no-op when origin already exists, and the
+	// caller-supplied remoteURL (which gitInitHandler validated with RequireHTTPS
+	// and resolved the PAT for) is ignored in that case. Since go-git then pushes
+	// to whatever origin records, a reused repo whose origin points at another -
+	// or an http - host would receive the credential resolved for remoteURL's
+	// host. When the remote already exists, require it to be https and to resolve
+	// to remoteURL's host before pushing; a mismatch fails closed.
+	originExisted := false
 	if _, err := repo.CreateRemote(&config.RemoteConfig{
 		Name: "origin",
 		URLs: []string{remoteURL},
-	}); err != nil && !errors.Is(err, gogit.ErrRemoteExists) {
-		return "", fmt.Errorf("adding origin remote: %w", err)
+	}); err != nil {
+		if !errors.Is(err, gogit.ErrRemoteExists) {
+			return "", fmt.Errorf("adding origin remote: %w", err)
+		}
+		originExisted = true
+		if err := requireOriginMatches(repo, remoteURL); err != nil {
+			return "", err
+		}
+	}
+
+	// If we added the origin ourselves but the repo already carries commit
+	// history, this is a pre-existing repository Cortex did not create - a repo it
+	// created always has its profile origin set, and would be handled by the
+	// requireOriginMatches branch above. Refuse to adopt a foreign repo: the
+	// stage-everything commit below would otherwise push whatever it contains to
+	// the profile remote with the profile PAT. A genuine first run initialises a
+	// fresh directory, which has no HEAD at this point.
+	if !originExisted {
+		if _, err := repo.Head(); err == nil {
+			return "", fmt.Errorf("refusing to reuse the existing repository at %s: it has commit history but no matching origin remote, so Cortex will not adopt it and push its contents", localPath)
+		}
 	}
 
 	wt, err := repo.Worktree()
@@ -295,19 +366,75 @@ func RemoteHost(repoPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("getting origin remote: %w", err)
 	}
-	urls := remote.Config().URLs
+	return validateOriginURLs(remote.Config().URLs)
+}
+
+// validateOriginURLs enforces that every URL configured on an origin remote is a
+// credential-safe https URL and that they all resolve to the same host, then
+// returns that host.
+//
+// Validating a single URL is not enough: go-git fetches from URLs[0] but pushes
+// to URLs[len-1], so an origin such as
+// ["https://gitlab.com/u/r.git", "http://attacker/u/r.git"] would pass a check
+// of the first URL alone and then send the PAT to the attacker host in cleartext
+// on push. Profile repos never need a multi-URL remote, so a URL that is not
+// https, carries userinfo, or resolves to a different host than the first is
+// rejected - the credential can only ever travel to one validated https host.
+func validateOriginURLs(urls []string) (string, error) {
 	if len(urls) == 0 {
 		return "", fmt.Errorf("no URLs configured for origin")
 	}
-	return RequireHTTPS(urls[0])
+	host, err := RequireHTTPS(urls[0])
+	if err != nil {
+		return "", err
+	}
+	for _, u := range urls[1:] {
+		h, err := RequireHTTPS(u)
+		if err != nil {
+			return "", err
+		}
+		if h != host {
+			return "", fmt.Errorf("origin has multiple hosts (%s and %s); refusing - the PAT could be pushed to either", host, h)
+		}
+	}
+	return host, nil
+}
+
+// requireOriginMatches fails closed unless the repo's existing origin remote is
+// safe to receive the credential the caller resolved for remoteURL: every
+// configured origin URL must be https, carry no userinfo, and resolve to the
+// same host as remoteURL. It guards the reused-repo path of InitAndPush, where
+// CreateRemote is a no-op and the pre-existing origin - not remoteURL - is what
+// go-git pushes to.
+func requireOriginMatches(repo *gogit.Repository, remoteURL string) error {
+	wantHost, err := RequireHTTPS(remoteURL)
+	if err != nil {
+		return err
+	}
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return fmt.Errorf("reading existing origin remote: %w", err)
+	}
+	gotHost, err := validateOriginURLs(remote.Config().URLs)
+	if err != nil {
+		return fmt.Errorf("existing origin remote is not usable: %w", err)
+	}
+	if gotHost != wantHost {
+		return fmt.Errorf("existing origin host %q does not match requested remote host %q; refusing to push (the credential for %q would be sent to %q)", gotHost, wantHost, wantHost, gotHost)
+	}
+	return nil
 }
 
 // RequireHTTPS validates that remoteURL uses the https scheme and has a host,
-// returning the hostname. Cortex is HTTPS + PAT only (see CONTRIBUTING.md):
+// returning its canonical hostname (see hostcanon.Canonicalize) - the same
+// normalisation the credential store keys on, so a host that only differs by
+// case, a trailing FQDN dot, or an explicit port still resolves the
+// credential stored for it. Cortex is HTTPS + PAT only (see CONTRIBUTING.md):
 // permitting http, file, git, or ssh URLs would let a PAT travel over cleartext
 // or an unexpected transport. It fails closed - a URL that does not parse,
-// carries no scheme, or has no host is rejected. Returning the host lets callers
-// validate and resolve the credential key in a single parse.
+// carries no scheme, has no host, or has a host IDNA cannot normalise is
+// rejected. Returning the host lets callers validate and resolve the
+// credential key in a single parse.
 func RequireHTTPS(remoteURL string) (string, error) {
 	u, err := url.Parse(remoteURL)
 	if err != nil {
@@ -329,5 +456,9 @@ func RequireHTTPS(remoteURL string) (string, error) {
 	if u.User != nil {
 		return "", fmt.Errorf("remote URL must not embed credentials (userinfo) - Cortex supplies the PAT separately, not in the URL")
 	}
-	return u.Hostname(), nil
+	host, err := hostcanon.Canonicalize(u.Hostname())
+	if err != nil {
+		return "", fmt.Errorf("remote URL %q has an unusable host: %w", remoteURL, err)
+	}
+	return host, nil
 }

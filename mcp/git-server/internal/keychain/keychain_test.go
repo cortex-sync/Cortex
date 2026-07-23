@@ -48,6 +48,78 @@ func TestKeyringBackendRoundTrip(t *testing.T) {
 	}
 }
 
+// TestCredentialsKeyIsCanonicalised is the regression guard for the
+// store/resolve host-key mismatch: a credential set under one form of a host
+// (mixed case, a trailing FQDN dot, or an explicit port) must be found,
+// overwritten, and deleted under any other canonically-equivalent form -
+// exactly as RequireHTTPS's resolve-side host normalises, per
+// hostcanon.Canonicalize.
+func TestCredentialsKeyIsCanonicalised(t *testing.T) {
+	keyring.MockInit()
+	resetBackend()
+	t.Cleanup(resetBackend)
+
+	if err := SetCredentials("GitLab.com", "alice", "token-aaa"); err != nil {
+		t.Fatalf("SetCredentials: %v", err)
+	}
+
+	lookups := []string{"gitlab.com", "GITLAB.COM", "gitlab.com.", "gitlab.com:443"}
+	for _, host := range lookups {
+		t.Run(host, func(t *testing.T) {
+			user, token, err := GetCredentials(host)
+			if err != nil {
+				t.Fatalf("GetCredentials(%q): %v", host, err)
+			}
+			if user != "alice" || token != "token-aaa" {
+				t.Fatalf("GetCredentials(%q) = (%q, %q), want (alice, token-aaa)", host, user, token)
+			}
+		})
+	}
+
+	// A differently-cased, ported form must overwrite the same entry, not
+	// create a second one.
+	if err := SetCredentials("gitlab.com:8443", "bob", "token-bbb"); err != nil {
+		t.Fatalf("SetCredentials (overwrite via different form): %v", err)
+	}
+	user, token, err := GetCredentials("GitLab.com")
+	if err != nil {
+		t.Fatalf("GetCredentials after overwrite: %v", err)
+	}
+	if user != "bob" || token != "token-bbb" {
+		t.Fatalf("GetCredentials after overwrite = (%q, %q), want (bob, token-bbb) - overwrite must hit the same canonical key", user, token)
+	}
+
+	// Delete via yet another equivalent form must remove the one entry.
+	if err := DeleteCredentials("GITLAB.COM."); err != nil {
+		t.Fatalf("DeleteCredentials: %v", err)
+	}
+	if _, _, err := GetCredentials("gitlab.com"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("after delete via an equivalent form, GetCredentials err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestCredentialsRejectUnnormalisableHost covers the fail-closed branch all
+// three entry points share: a host hostcanon.Canonicalize cannot normalise
+// (empty, or one IDNA rejects) must return an error instead of silently
+// falling back to an unnormalised store key.
+func TestCredentialsRejectUnnormalisableHost(t *testing.T) {
+	keyring.MockInit()
+	resetBackend()
+	t.Cleanup(resetBackend)
+
+	for _, host := range []string{"", "-invalid-.com"} {
+		if err := SetCredentials(host, "alice", "token-aaa"); err == nil {
+			t.Fatalf("SetCredentials(%q) = nil, want error", host)
+		}
+		if _, _, err := GetCredentials(host); err == nil {
+			t.Fatalf("GetCredentials(%q) = nil error, want error", host)
+		}
+		if err := DeleteCredentials(host); err == nil {
+			t.Fatalf("DeleteCredentials(%q) = nil, want error", host)
+		}
+	}
+}
+
 // TestConfigDirOverrideForcesFileBackend verifies that CORTEX_CONFIG_DIR pins
 // the encrypted-file backend at the given directory even when a working OS
 // keyring is present, and that the keyring is never written to.

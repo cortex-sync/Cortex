@@ -19,6 +19,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/cortex-sync/Cortex/mcp/git-server/internal/hostcanon"
 )
 
 // envUsernameDefault is used when CORTEX_GIT_USERNAME is unset. GitHub and
@@ -56,13 +58,18 @@ func envCredentials(host string) (username, token string, ok bool) {
 	return username, token, true
 }
 
-// hostsEqual compares two hostnames for credential scoping: case-insensitive,
-// ignoring surrounding whitespace and a trailing FQDN root dot (so
-// "gitlab.com." matches "gitlab.com"). Matching is exact otherwise - the env
-// token is only ever offered to its named host.
+// hostsEqual compares two hostnames for credential scoping using the same
+// normalisation the credential store keys on (see hostcanon.Canonicalize):
+// case-insensitive, ignoring surrounding whitespace, a trailing FQDN root dot,
+// and an explicit port, with IDNA normalisation so a Unicode host and its
+// punycode form compare equal. A host either side cannot normalise is never
+// treated as equal to anything (fails closed) - the env token is only ever
+// offered to its named host.
 func hostsEqual(a, b string) bool {
-	canon := func(h string) string {
-		return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+	ca, errA := hostcanon.Canonicalize(a)
+	cb, errB := hostcanon.Canonicalize(b)
+	if errA != nil || errB != nil {
+		return false
 	}
-	return canon(a) == canon(b)
+	return ca == cb
 }
