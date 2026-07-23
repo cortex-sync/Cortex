@@ -131,21 +131,27 @@ survived. Highest-leverage cluster first.
 
 ### Release pipeline (NEW - highest-leverage before v0.3)
 
-- [ ] **(high) The version gate runs AFTER the release is already public.** `.goreleaser.yaml:75`
-      has `draft: false`, so goreleaser publishes a live release, then `release.yml:50-55`
-      checks `mcpb/manifest.json` vs the tag. A mismatch or any `.mcpb`-step failure ->
-      public partial release (binaries + checksums live, no `.mcpb`, tag burned). **Fix:**
-      run the version check as the first release-job step, and/or `draft: true` with an
-      explicit publish at the end.
-- [ ] **(medium) Release is gated only on e2e, not on CI.** `release.yml:25` is `needs: e2e`
-      only; nothing blocks the release on lint/unit-tests/coverage/gosec/govulncheck/gitleaks,
-      and `codecov.yml:5-7` notes there are no required status checks - so a tag on a red
-      commit ships. **Fix:** gate the release on CI too (required checks or `needs:`).
-- [ ] **(medium) Only 1 of 3 version files is checked at release.** `release.yml:50-55`
-      validates `mcpb/manifest.json`; `bin/VERSION` + `.claude-plugin/plugin.json` are a
-      manual checklist (`RELEASING.md:30-33`). A stale `bin/VERSION` ships a plugin whose
-      launcher fetches the previous release's binary - green pipeline, wrong artifact.
-      **Fix:** cheap CI check that all three equal the tag.
+- [x] **(done, one release-integrity pass) (high) The version gate ran AFTER the
+      release was already public; (medium) release was gated only on `e2e`, not
+      CI; (medium) only 1 of 3 version files was checked at release.** All three
+      closed together since they're the same root cause (nothing blocked
+      `goreleaser`'s publish before it ran).
+      `.goreleaser.yaml`: `release.draft` flipped `false` -> `true` - goreleaser
+      now creates the release as a draft, not live.
+      `release.yml`: new `verify` job (runs in parallel with `e2e`, both required
+      before `release` starts) checks all **three** version-bearing files
+      (`bin/VERSION`, `.claude-plugin/plugin.json`, `mcpb/manifest.json`) agree
+      with the tag, then re-runs CI's full gate set (lint, vet, build, test +
+      75% coverage floor, gosec, govulncheck, gitleaks) against the tagged
+      commit - CI itself already runs on the tag push (its `on: push` has no
+      branch filter) but was never wired as a release gate. The `release` job's
+      final step now explicitly publishes the release (`gh release edit
+      --draft=false`) only after the `.mcpb` bundles are built and attached, so
+      a failure anywhere before that leaves a non-public draft instead of a
+      live, partial release with a burned tag. Also scoped `contents: write`
+      down to just the `release` job (was leaking to `e2e` at the workflow
+      level - folds in that low-severity item too). `docs/RELEASING.md` and
+      `CONTRIBUTING.md` updated to describe the real pipeline order.
 - [ ] **(low) The lefthook gofmt hook is a no-op.** `lefthook.yml:6` runs `gofmt -l` which
       exits 0 even when it lists unformatted files (verified). **Fix:** use the
       `test -z "$(gofmt -l ...)"` pattern `ci.yml:29-31` already uses.

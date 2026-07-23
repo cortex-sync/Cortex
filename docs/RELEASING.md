@@ -9,15 +9,28 @@ asset upload.
 Pushing a tag matching `v*.*.*` triggers `.github/workflows/release.yml`:
 
 1. **`e2e` gate** - `make e2e` runs an end-to-end sync against a disposable Gitea
-   over HTTPS. The release job does not start unless this passes.
-2. **`goreleaser release --clean`** - cross-compiles `cortex-git-server` for the
+   over HTTPS.
+2. **`verify` gate** - checks all **three** version-bearing files agree with the
+   tag (`bin/VERSION`, `.claude-plugin/plugin.json`, `mcpb/manifest.json` - see
+   the pre-tag checklist below), then re-runs CI's full gate set against the
+   tagged commit: lint, vet, build, test + the 75% coverage floor, gosec,
+   govulncheck, and gitleaks. The CI workflow also runs on the tag push, but as
+   a separate workflow was never itself a release gate - `verify` closes that.
+   Both `e2e` and `verify` run in parallel and must pass before anything below
+   starts, so a version mismatch or a red gate is caught **before** goreleaser
+   builds or publishes anything.
+3. **`goreleaser release --clean`** - cross-compiles `cortex-git-server` for the
    five targets (linux/darwin `amd64`+`arm64`, windows `amd64`; no windows/arm64),
    builds `tar.gz` archives (`zip` for windows) named
-   `cortex-git-server_<version>_<os>_<arch>`, generates `checksums.txt`, creates
-   the GitHub release, and uploads all of it. Built with `GOTOOLCHAIN=go1.26.4`.
-3. **`.mcpb` bundles** - packs one Claude Desktop / Cowork bundle per target and
-   attaches them. This step **hard-fails if `mcpb/manifest.json` version does not
-   equal the tag** (without the leading `v`), so the manifest must be bumped first.
+   `cortex-git-server_<version>_<os>_<arch>`, generates `checksums.txt`, and
+   creates the GitHub release **as a draft** (`.goreleaser.yaml` `release.draft:
+   true`) - not yet public. Built with `GOTOOLCHAIN=go1.26.5`.
+4. **`.mcpb` bundles** - packs one Claude Desktop / Cowork bundle per target and
+   attaches them to the still-draft release.
+5. **Publish** - only now is the release flipped public (`gh release edit
+   --draft=false`). A failure at step 3 or 4 leaves a non-public draft instead
+   of a live, partial release - delete the draft and retry rather than treating
+   it as a shipped (if incomplete) release.
 
 The launcher (`bin/cortex-git-launch.sh`) fetches
 `cortex-git-server_<version>_<os>_<arch>.tar.gz` + `checksums.txt` from the release
@@ -30,8 +43,12 @@ construction (goreleaser's `name_template` matches the launcher's fetch pattern)
 - [ ] All **three** version-bearing files agree with the tag (see
       [CONTRIBUTING.md](../CONTRIBUTING.md#releases)): `.claude-plugin/plugin.json`
       `version` (no `v`), `bin/VERSION` (with `v`), and `mcpb/manifest.json`
-      `version` (no `v` - the `.mcpb` step fails closed if this does not match).
-- [ ] `make validate` is green (lint, vet, build, unit tests).
+      `version` (no `v`). The `verify` job checks this automatically and fails
+      closed before any build starts - this is a local pre-check to catch it
+      before pushing the tag, not the only gate.
+- [ ] `make validate` is green (lint, vet, build, unit tests) - `verify` re-runs
+      this (plus coverage, gosec, govulncheck, gitleaks) against the tagged
+      commit regardless, but a red local run means a red release run.
 - [ ] `make test-launcher` is green (SHA-256 integrity gate).
 - [ ] `make e2e` passes locally, or you are confident the CI `e2e` gate will
       (it is a hard release gate).

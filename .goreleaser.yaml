@@ -72,5 +72,10 @@ release:
     owner: cortex-sync
     name: Cortex
   name_template: "v{{ .Version }}"
-  draft: false
+  # Draft, not live: release.yml only flips this to public in its final step,
+  # after the .mcpb bundles are built and attached. Publishing here (draft:
+  # false) would make the release live before that step runs, so any failure
+  # in the .mcpb step (or anything else after this) would leave a public,
+  # partial release with a burned tag.
+  draft: true
   prerelease: auto
