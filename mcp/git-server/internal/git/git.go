@@ -60,10 +60,12 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 		return "", fmt.Errorf("getting worktree: %w", err)
 	}
 
-	if err := wt.AddWithOptions(&gogit.AddOptions{All: true}); err != nil {
-		return "", fmt.Errorf("staging changes: %w", err)
-	}
-
+	// Status is read before staging (not after) so the secret gate below runs
+	// while nothing is staged yet: a blocked commit must leave the worktree
+	// exactly as it was, or the gate's own remediation ("add the path to
+	// .gitignore, then retry") is a dead end - the flagged file would stay
+	// staged from this call, so a retry re-blocks forever with no way to
+	// unstage it.
 	status, err := wt.Status()
 	if err != nil {
 		return "", fmt.Errorf("getting status: %w", err)
@@ -88,10 +90,11 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 		return "no file changes; pushed pending local commit(s)", nil
 	}
 
-	// Server-side secret gate: scan the content of every changed file before
-	// committing. This is the last line of defence behind the skill-level
-	// filename gate - it catches a credential pasted into a file's body, which a
-	// filename check cannot, and runs even if the skill gate is bypassed. It is
+	// Server-side secret gate: scan the content of every changed file, plus the
+	// commit message itself, before staging or committing anything. This is the
+	// last line of defence behind the skill-level filename gate - it catches a
+	// credential pasted into a file's body (or the message), which a filename
+	// check cannot, and runs even if the skill gate is bypassed. The file scan is
 	// tuned for accidental pastes into text rather than adversarial obfuscation:
 	// binary blobs are skipped and oversized files are scanned only up to the
 	// limit (see secretscan), with the profile .gitignore and filename gate
@@ -104,8 +107,17 @@ func CommitAndPush(ctx context.Context, repoPath, message, username, token strin
 	if err != nil {
 		return "", fmt.Errorf("scanning changes for secrets: %w", err)
 	}
+	msgFindings, err := secretscan.ScanText("commit message", message)
+	if err != nil {
+		return "", fmt.Errorf("scanning commit message for secrets: %w", err)
+	}
+	findings = append(findings, msgFindings...)
 	if len(findings) > 0 {
 		return "", &secretscan.BlockedError{Findings: findings}
+	}
+
+	if err := wt.AddWithOptions(&gogit.AddOptions{All: true}); err != nil {
+		return "", fmt.Errorf("staging changes: %w", err)
 	}
 
 	commit, err := wt.Commit(message, &gogit.CommitOptions{
@@ -248,7 +260,10 @@ func Clone(ctx context.Context, remoteURL, localPath, username, token string) (s
 
 // InitAndPush initialises a new repo at localPath, sets origin to remoteURL,
 // commits the files already present, and pushes to the (pre-created, empty)
-// remote.
+// remote. Subject to the same server-side secret gate as CommitAndPush (files
+// and the commit message) before anything is staged - first-run setup
+// publishes a whole directory sight-unseen, so this path needs the gate at
+// least as much as an ordinary commit does.
 //
 // go-git's PlainClone cannot clone an empty remote (it returns
 // ErrEmptyRemoteRepository), so first-run setup initialises locally and pushes
@@ -311,16 +326,37 @@ func InitAndPush(ctx context.Context, localPath, remoteURL, message, username, t
 	if err != nil {
 		return "", fmt.Errorf("getting worktree: %w", err)
 	}
-	if err := wt.AddWithOptions(&gogit.AddOptions{All: true}); err != nil {
-		return "", fmt.Errorf("staging files: %w", err)
-	}
 
+	// Status before staging, and the secret gate before staging too - see
+	// CommitAndPush for the full rationale (a blocked commit must leave nothing
+	// staged, so the gate's "fix it and retry" advice is actually a way forward).
 	status, err := wt.Status()
 	if err != nil {
 		return "", fmt.Errorf("getting status: %w", err)
 	}
 	if status.IsClean() {
 		return "", fmt.Errorf("nothing to commit - write the profile files into %s before initialising", localPath)
+	}
+
+	paths := make([]string, 0, len(status))
+	for path := range status {
+		paths = append(paths, path)
+	}
+	findings, err := secretscan.ScanFiles(localPath, paths)
+	if err != nil {
+		return "", fmt.Errorf("scanning files for secrets: %w", err)
+	}
+	msgFindings, err := secretscan.ScanText("commit message", message)
+	if err != nil {
+		return "", fmt.Errorf("scanning commit message for secrets: %w", err)
+	}
+	findings = append(findings, msgFindings...)
+	if len(findings) > 0 {
+		return "", &secretscan.BlockedError{Findings: findings}
+	}
+
+	if err := wt.AddWithOptions(&gogit.AddOptions{All: true}); err != nil {
+		return "", fmt.Errorf("staging files: %w", err)
 	}
 
 	commit, err := wt.Commit(message, &gogit.CommitOptions{
