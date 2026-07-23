@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.26.4"
+          go-version: "1.26.5"
           cache-dependency-path: mcp/git-server/go.sum
       - name: e2e (Gitea over HTTPS)
         run: make e2e
@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 0 # goreleaser needs full history + tags for the changelog
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.26.4"
+          go-version: "1.26.5"
           cache-dependency-path: mcp/git-server/go.sum
       - uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
         with:
@@ -40,7 +40,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Build release binaries with the patched stdlib regardless of the Go
           # the runner ships, matching the version CI validates against.
-          GOTOOLCHAIN: go1.26.4
+          GOTOOLCHAIN: go1.26.5
 
       # Pack the Claude Desktop / Cowork .mcpb bundles (one per target) and
       # attach them to the release goreleaser just created. The manifest version
@@ -57,4 +57,4 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" dist/*.mcpb --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GOTOOLCHAIN: go1.26.4
+          GOTOOLCHAIN: go1.26.5
