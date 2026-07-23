@@ -228,12 +228,24 @@ func InitAndPush(ctx context.Context, localPath, remoteURL, message, username, t
 		}
 	}
 
-	// Configure origin, tolerating an existing remote.
+	// Configure origin, tolerating a pre-existing remote - but never trust one
+	// blindly. CreateRemote is a silent no-op when origin already exists, and the
+	// caller-supplied remoteURL (which gitInitHandler validated with RequireHTTPS
+	// and resolved the PAT for) is ignored in that case. Since go-git then pushes
+	// to whatever origin records, a reused repo whose origin points at another -
+	// or an http - host would receive the credential resolved for remoteURL's
+	// host. When the remote already exists, require it to be https and to resolve
+	// to remoteURL's host before pushing; a mismatch fails closed.
 	if _, err := repo.CreateRemote(&config.RemoteConfig{
 		Name: "origin",
 		URLs: []string{remoteURL},
-	}); err != nil && !errors.Is(err, gogit.ErrRemoteExists) {
-		return "", fmt.Errorf("adding origin remote: %w", err)
+	}); err != nil {
+		if !errors.Is(err, gogit.ErrRemoteExists) {
+			return "", fmt.Errorf("adding origin remote: %w", err)
+		}
+		if err := requireOriginMatches(repo, remoteURL); err != nil {
+			return "", err
+		}
 	}
 
 	wt, err := repo.Worktree()
@@ -295,11 +307,63 @@ func RemoteHost(repoPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("getting origin remote: %w", err)
 	}
-	urls := remote.Config().URLs
+	return validateOriginURLs(remote.Config().URLs)
+}
+
+// validateOriginURLs enforces that every URL configured on an origin remote is a
+// credential-safe https URL and that they all resolve to the same host, then
+// returns that host.
+//
+// Validating a single URL is not enough: go-git fetches from URLs[0] but pushes
+// to URLs[len-1], so an origin such as
+// ["https://gitlab.com/u/r.git", "http://attacker/u/r.git"] would pass a check
+// of the first URL alone and then send the PAT to the attacker host in cleartext
+// on push. Profile repos never need a multi-URL remote, so a URL that is not
+// https, carries userinfo, or resolves to a different host than the first is
+// rejected - the credential can only ever travel to one validated https host.
+func validateOriginURLs(urls []string) (string, error) {
 	if len(urls) == 0 {
 		return "", fmt.Errorf("no URLs configured for origin")
 	}
-	return RequireHTTPS(urls[0])
+	host, err := RequireHTTPS(urls[0])
+	if err != nil {
+		return "", err
+	}
+	for _, u := range urls[1:] {
+		h, err := RequireHTTPS(u)
+		if err != nil {
+			return "", err
+		}
+		if h != host {
+			return "", fmt.Errorf("origin has multiple hosts (%s and %s); refusing - the PAT could be pushed to either", host, h)
+		}
+	}
+	return host, nil
+}
+
+// requireOriginMatches fails closed unless the repo's existing origin remote is
+// safe to receive the credential the caller resolved for remoteURL: every
+// configured origin URL must be https, carry no userinfo, and resolve to the
+// same host as remoteURL. It guards the reused-repo path of InitAndPush, where
+// CreateRemote is a no-op and the pre-existing origin - not remoteURL - is what
+// go-git pushes to.
+func requireOriginMatches(repo *gogit.Repository, remoteURL string) error {
+	wantHost, err := RequireHTTPS(remoteURL)
+	if err != nil {
+		return err
+	}
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return fmt.Errorf("reading existing origin remote: %w", err)
+	}
+	gotHost, err := validateOriginURLs(remote.Config().URLs)
+	if err != nil {
+		return fmt.Errorf("existing origin remote is not usable: %w", err)
+	}
+	if gotHost != wantHost {
+		return fmt.Errorf("existing origin host %q does not match requested remote host %q; refusing to push (the credential for %q would be sent to %q)", gotHost, wantHost, wantHost, gotHost)
+	}
+	return nil
 }
 
 // RequireHTTPS validates that remoteURL uses the https scheme and has a host,
