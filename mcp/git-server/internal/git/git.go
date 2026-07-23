@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 
+	"github.com/cortex-sync/Cortex/mcp/git-server/internal/hostcanon"
 	"github.com/cortex-sync/Cortex/mcp/git-server/internal/secretscan"
 )
 
@@ -425,11 +426,15 @@ func requireOriginMatches(repo *gogit.Repository, remoteURL string) error {
 }
 
 // RequireHTTPS validates that remoteURL uses the https scheme and has a host,
-// returning the hostname. Cortex is HTTPS + PAT only (see CONTRIBUTING.md):
+// returning its canonical hostname (see hostcanon.Canonicalize) - the same
+// normalisation the credential store keys on, so a host that only differs by
+// case, a trailing FQDN dot, or an explicit port still resolves the
+// credential stored for it. Cortex is HTTPS + PAT only (see CONTRIBUTING.md):
 // permitting http, file, git, or ssh URLs would let a PAT travel over cleartext
 // or an unexpected transport. It fails closed - a URL that does not parse,
-// carries no scheme, or has no host is rejected. Returning the host lets callers
-// validate and resolve the credential key in a single parse.
+// carries no scheme, has no host, or has a host IDNA cannot normalise is
+// rejected. Returning the host lets callers validate and resolve the
+// credential key in a single parse.
 func RequireHTTPS(remoteURL string) (string, error) {
 	u, err := url.Parse(remoteURL)
 	if err != nil {
@@ -451,5 +456,9 @@ func RequireHTTPS(remoteURL string) (string, error) {
 	if u.User != nil {
 		return "", fmt.Errorf("remote URL must not embed credentials (userinfo) - Cortex supplies the PAT separately, not in the URL")
 	}
-	return u.Hostname(), nil
+	host, err := hostcanon.Canonicalize(u.Hostname())
+	if err != nil {
+		return "", fmt.Errorf("remote URL %q has an unusable host: %w", remoteURL, err)
+	}
+	return host, nil
 }

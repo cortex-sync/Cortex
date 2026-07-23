@@ -291,24 +291,29 @@ internal mirror.
       **Fix:** require explicit user confirmation for credential mutations and echo
       the affected host; consider driving these from a user-initiated skill rather
       than a model-callable tool.
-- [ ] **L4 (low) - `hostsEqual` does no IDN/punycode normalisation.**
-      `cmd/server/envcreds.go:63-68`. Only lowercases/trims; a punycode/Unicode
-      confusable origin can make env-token scoping behave inconsistently (compounded
-      by C1). **Fix:** normalise both hosts via `golang.org/x/net/idna` before exact
-      comparison; reject non-normalisable hosts.
-- [ ] **(found 2026-06-24, adversarial review) Credential store key is byte-exact while
-      resolution canonicalises via `url.Hostname()`.** `set_credentials` stores under the
-      raw `host` arg (`cmd/server/main.go` `setCredentialsHandler` -> `keychain` ->
-      `file_store.go` / `keyring_store.go`, exact-string keyed), but lookups key on
-      `RequireHTTPS` -> `u.Hostname()` (`internal/git/git.go`), which strips the port and
-      does not lowercase. So a `host:port` remote (or a case / trailing-dot mismatch)
-      stores and resolves under different keys -> `ErrNotFound`, breaking the "command-only
-      Codex block just works" guarantee for clone/pull/push/init. Pre-existing (not
-      Codex-only); bounded because github/gitlab use no port. **Fix:** canonicalise the
-      host at the store boundary the same way lookup does (lowercase + trim + strip
-      trailing dot + strip port), or have `set_credentials` accept the remote URL and run
-      it through `RequireHTTPS` so the stored key == the resolve key. Add a regression
-      test. Relates to L4 (env path) - do both as one host-normalisation pass.
+- [x] **(done, one host-normalisation pass) L4 (low) - `hostsEqual` does no
+      IDN/punycode normalisation, and the credential store key is byte-exact while
+      resolution canonicalises via `url.Hostname()`.** New `internal/hostcanon` package
+      (`Canonicalize`) is the single normalisation rule now shared by all three previously
+      inconsistent call sites: trims whitespace, strips a trailing `:port`, strips a
+      trailing FQDN root dot, then applies `golang.org/x/net/idna` "Lookup" normalisation
+      (ASCII case-folding + Unicode/punycode folding) - fails closed on a host IDNA cannot
+      normalise rather than passing it through unnormalised. Wired into
+      `internal/keychain.SetCredentials/GetCredentials/DeleteCredentials` (the store
+      boundary - closes the byte-exact-key bug), `internal/git.RequireHTTPS` (the resolve
+      side, so the returned host is already canonical - `RemoteHost`/`validateOriginURLs`/
+      `requireOriginMatches` inherit correctness for free), and
+      `cmd/server/envcreds.go.hostsEqual` (replacing its private partial-canon closure).
+      A homoglyph domain (e.g. Cyrillic `а`) still canonicalises to a *distinct* punycode
+      form from the real one - confirmed by regression test - so this closes L4 without
+      merging genuinely different hosts. `golang.org/x/net` promoted from indirect to a
+      direct dependency (already in `go.sum` transitively); `golang.org/x/text` bumped
+      `v0.37.0` -> `v0.39.0` after `govulncheck` flagged the version idna pulled in as
+      reachable-vulnerable (GO-2026-5970, fixed in `v0.39.0`) - caught and fixed as part of
+      this same change rather than shipping a new reachable CVE. Regression tests in all
+      four touched packages (case/port/trailing-dot equivalence, IDNA equivalence, the
+      homoglyph-distinctness guard, and a same-key set/overwrite/delete round trip
+      through the store); `make validate` and `govulncheck` green.
 - [ ] *(info, optional)* enforce `0700` on the credentials dir when it pre-exists
       (the `os.MkdirAll(dir, 0o700)` in `fileStore.save`,
       `internal/keychain/file_store.go:183-184`); add a regression test asserting no
