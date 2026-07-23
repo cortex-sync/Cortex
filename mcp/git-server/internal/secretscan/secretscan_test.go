@@ -53,6 +53,37 @@ func TestScanFilesDetectsSecrets(t *testing.T) {
 	}
 }
 
+// TestScanText covers the same ruleset applied directly to text rather than a
+// file on disk - the commit-message gate, which ScanFiles cannot cover since
+// it only ever reads paths that exist in the repo's working tree.
+func TestScanText(t *testing.T) {
+	t.Run("detects a secret", func(t *testing.T) {
+		findings, err := ScanText("commit message", "cortex: add token glpat-ABCDEFGHIJ1234567890\n")
+		if err != nil {
+			t.Fatalf("ScanText: %v", err)
+		}
+		if len(findings) != 1 {
+			t.Fatalf("findings = %v, want exactly 1", findings)
+		}
+		if findings[0].Rule != "gitlab-pat" {
+			t.Fatalf("rule = %q, want gitlab-pat", findings[0].Rule)
+		}
+		if findings[0].Path != "commit message" {
+			t.Fatalf("path = %q, want the caller-supplied label", findings[0].Path)
+		}
+	})
+
+	t.Run("clean message", func(t *testing.T) {
+		findings, err := ScanText("commit message", "cortex: sync 2026-07-23\n")
+		if err != nil {
+			t.Fatalf("ScanText: %v", err)
+		}
+		if len(findings) != 0 {
+			t.Fatalf("findings = %v, want none", findings)
+		}
+	})
+}
+
 func TestScanFilesCleanContent(t *testing.T) {
 	root := t.TempDir()
 	// Prose that name-drops the keywords with spaces (as English does) must not

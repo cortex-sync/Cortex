@@ -92,25 +92,27 @@ survived. Highest-leverage cluster first.
 
 ### Secret-scan gate coverage (NEW)
 
-- [ ] **(medium) `InitAndPush` skips the secret-scan gate entirely.** `git.go:243-273`
-      stages `All:true`, commits, and pushes with no `secretscan.ScanFiles` call - only
-      `CommitAndPush` (`git.go:98-108`) has the gate. Contradicts the secretscan package
-      doc (`secretscan.go:2-4`). First-run setup (the op that publishes a whole directory
-      sight-unseen) pushes an accidental `.env`/pasted token unscanned. **Fix:** run the
-      scan over the staged paths in `InitAndPush` before `wt.Commit`.
-- [ ] **(medium) A blocked commit leaves the secret staged - the error's own remediation
-      is a dead-end.** `CommitAndPush` runs `AddWithOptions{All:true}` (`git.go:62`)
-      before the scan (`git.go:102-107`); go-git writes the index + the secret's blob to
-      `.git/objects` immediately. Verified: after a block the file stays `staging=A`, so
-      adding it to `.gitignore` and retrying (what `BlockedError` advises,
-      `secretscan.go:96-97`) still re-blocks forever, and no unstage/reset tool exists.
-      **Fix:** scan *before* staging (derive paths from a pre-add `wt.Status()`), or
-      unstage flagged paths on block; reword the error.
-- [ ] **(low) The commit message is never secret-scanned.** The gate covers file contents
-      only; a token pasted into `message` (`main.go:189`) reaches the remote in the commit
-      header. **Fix:** run the ruleset over the message in `CommitAndPush`/`InitAndPush`.
-- [ ] *(info)* After a blocked commit the secret's blob persists in `.git/objects` even if
-      the file is later edited - at-rest residue in the local profile repo nothing cleans up.
+- [x] **(done, one gate-coverage pass) (medium) `InitAndPush` skipped the
+      secret-scan gate entirely; (medium) a blocked commit left the secret
+      staged with a dead-end remediation; (low) the commit message was never
+      scanned.** All three closed together in `internal/git/git.go` and
+      `internal/secretscan/secretscan.go`. `InitAndPush` now runs the same
+      gate `CommitAndPush` does (it publishes a whole directory sight-unseen on
+      first-run setup, so needed it at least as much). Both functions now read
+      `wt.Status()` and scan **before** `AddWithOptions` rather than after, so a
+      blocked commit leaves the worktree exactly as the caller found it -
+      `BlockedError`'s existing "fix the secret and retry" advice is now
+      actually true, rather than re-blocking forever on a file that stays
+      staged. New `secretscan.ScanText(label, text)` (refactored out of
+      `scanFile`'s line-scanning loop as a shared `scanLines` helper) runs the
+      same ruleset over the commit message, reported as `commit message:line
+      (rule)`. `SECURITY.md` updated to describe the real (now correct)
+      behaviour. Regression tests: `InitAndPush` blocked by a file secret and
+      by a message secret; a blocked `CommitAndPush` leaves the file
+      `Untracked` (not staged); `ScanText` unit tests. *(info)* item (a
+      blocked secret's blob persisting in `.git/objects`) is unchanged - not
+      actionable without more invasive history rewriting, and low-severity by
+      its own tag.
 
 ### Tool-surface hardening (NEW)
 

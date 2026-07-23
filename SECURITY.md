@@ -111,21 +111,25 @@ injected platform secret), or use an OS keychain instead of the file backend.
   `git_commit_push` / `git_init` stage *all* non-ignored files.
 - **Sync safety gate, two layers:** the `sync-profile` skill inspects the
   changed-file list and refuses anything matching sensitive *filename* patterns
-  (first line of defence, at the LLM layer). Behind it, `git_commit_push`
-  enforces a **server-side content scan**: it reads the body of every changed
-  file and refuses the commit if a high-signal credential pattern matches (AWS
-  access-key IDs and secret keys, Azure storage / Service Bus keys, private-key
-  blocks including encrypted ones, GitLab/GitHub PATs, JWTs, Slack tokens, Google
-  API keys, and quoted *or* unquoted `secret = ...` assignments), reporting the
-  offending `file:line
-  (rule)` without ever echoing the secret value. It scans the *text* of changed
-  files: binary blobs are skipped and an oversized file (>5 MiB) is scanned only
-  up to that limit, since the threat is an accidental paste into a small text
-  file, not a secret buried in a large binary - the profile `.gitignore` and the
-  filename gate cover that residue. This backstop holds even if the skill-level
-  gate is skipped, and catches secrets pasted into a file's *text* that a
-  filename check cannot. The ruleset targets common credential shapes and is
-  tuned for low false positives, so it is not exhaustive.
+  (first line of defence, at the LLM layer). Behind it, **both** `git_commit_push`
+  *and* `git_init` enforce a **server-side content scan**, run before anything is
+  staged or committed: it reads the body of every changed file and refuses the
+  commit if a high-signal credential pattern matches (AWS access-key IDs and
+  secret keys, Azure storage / Service Bus keys, private-key blocks including
+  encrypted ones, GitLab/GitHub PATs, JWTs, Slack tokens, Google API keys, and
+  quoted *or* unquoted `secret = ...` assignments), reporting the offending
+  `file:line (rule)` without ever echoing the secret value. The same ruleset is
+  also run over the **commit message** itself, reported as `commit message:line
+  (rule)`. Because the scan runs before staging, a refused commit leaves the
+  worktree untouched - fixing the file (or the message) and retrying works, it
+  is not a dead end. It scans the *text* of changed files: binary blobs are
+  skipped and an oversized file (>5 MiB) is scanned only up to that limit, since
+  the threat is an accidental paste into a small text file, not a secret buried
+  in a large binary - the profile `.gitignore` and the filename gate cover that
+  residue. This backstop holds even if the skill-level gate is skipped, and
+  catches secrets pasted into a file's *text* (or the message) that a filename
+  check cannot. The ruleset targets common credential shapes and is tuned for
+  low false positives, so it is not exhaustive.
 - **Optional: gitleaks pre-commit hook on the profile repo (extra protection).**
   The built-in content scan is the always-on, zero-dependency baseline. Users who
   want gitleaks' comprehensive ruleset on their *profile* repo can add it as a

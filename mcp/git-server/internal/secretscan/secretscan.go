@@ -1,7 +1,8 @@
 // Package secretscan provides a lightweight, dependency-free content scan for
-// high-signal secrets. It backs the server-side commit gate: changed files are
-// scanned before a commit is created so a credential pasted into a memory
-// file's body never reaches the remote.
+// high-signal secrets. It backs the server-side commit gate: changed files
+// (ScanFiles) and the commit message itself (ScanText) are scanned before a
+// commit is created, so a credential pasted into a memory file's body or the
+// message never reaches the remote.
 //
 // The ruleset is deliberately curated for low false positives rather than
 // exhaustive coverage - the threat model is an accidental paste of a real
@@ -176,6 +177,23 @@ func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 		return nil, nil // binary content; not text-scannable, skip
 	}
 
+	return scanLines(relPath, data)
+}
+
+// ScanText scans arbitrary text - not a file on disk - for secrets, using
+// label as the reported Finding.Path. ScanFiles only ever sees paths that
+// exist in the repo's working tree, so it cannot cover content that never
+// touches disk, such as a commit message; ScanText is the same ruleset
+// applied directly to that text.
+func ScanText(label, text string) ([]Finding, error) {
+	return scanLines(label, []byte(text))
+}
+
+// scanLines runs every rule over data line by line, reporting at most one
+// finding per rule (the first match) to keep output concise, tagged with path
+// (a file path for scanFile, or a caller-chosen label like "commit message"
+// for ScanText).
+func scanLines(path string, data []byte) ([]Finding, error) {
 	var findings []Finding
 	seen := make(map[string]bool, len(rules))
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -189,13 +207,13 @@ func scanFile(root *os.Root, relPath string) ([]Finding, error) {
 				continue
 			}
 			if r.pattern.Match(line) {
-				findings = append(findings, Finding{Path: relPath, Rule: r.name, Line: lineNo})
+				findings = append(findings, Finding{Path: path, Rule: r.name, Line: lineNo})
 				seen[r.name] = true
 			}
 		}
 	}
 	if err := sc.Err(); err != nil && !errors.Is(err, bufio.ErrTooLong) {
-		return nil, fmt.Errorf("scanning %s: %w", relPath, err)
+		return nil, fmt.Errorf("scanning %s: %w", path, err)
 	}
 	// A line longer than maxLineLen (bufio.ErrTooLong) is a data blob, not pasted
 	// prose: stop at it and keep the findings from the lines already scanned,

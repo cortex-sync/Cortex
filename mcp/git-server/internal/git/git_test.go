@@ -417,6 +417,104 @@ func TestCommitAndPushBlocksSecret(t *testing.T) {
 	}
 }
 
+// TestCommitAndPushBlockedSecretLeavesNothingStaged is the regression guard for
+// the "blocked commit is a dead end" finding: the old order staged everything
+// (AddWithOptions) before scanning, so a block left the flagged file staged
+// (staging=Added) with no way to unstage it - "add it to .gitignore and retry"
+// (BlockedError's own advice) would re-block forever since the file never
+// stopped being staged. Scanning must now happen before staging, so a blocked
+// commit leaves the worktree exactly as the caller found it.
+func TestCommitAndPushBlockedSecretLeavesNothingStaged(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	writeFile(t, dir, "memory.md", "notes\nGL_TOKEN = glpat-ABCDEFGHIJ1234567890\n")
+
+	if _, err := CommitAndPush(context.Background(), dir, "cortex: update", "u", "t"); err == nil {
+		t.Fatal("expected commit to be blocked, got nil error")
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	status, err := wt.Status()
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	fs := status.File("memory.md")
+	if fs.Staging != gogit.Untracked {
+		t.Fatalf("memory.md staging = %q, want Untracked (nothing left staged after a block)", string(fs.Staging))
+	}
+}
+
+// TestCommitAndPushBlocksSecretInMessage covers the message-scan half of the
+// gate: file content is clean, but the message itself carries a secret.
+func TestCommitAndPushBlocksSecretInMessage(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := gogit.PlainInit(dir, false); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	writeFile(t, dir, "notes.md", "clean content\n")
+
+	_, err := CommitAndPush(context.Background(), dir, "cortex: rotate glpat-ABCDEFGHIJ1234567890", "u", "t")
+	if err == nil {
+		t.Fatal("expected commit to be blocked, got nil error")
+	}
+	if !strings.Contains(err.Error(), "refusing to commit") {
+		t.Fatalf("error = %v, want it to mention 'refusing to commit'", err)
+	}
+	if !strings.Contains(err.Error(), "commit message") {
+		t.Fatalf("error = %v, want it to name the commit message as the offending location", err)
+	}
+}
+
+// TestInitAndPushBlocksSecret is the regression guard for the "InitAndPush
+// skips the secret-scan gate entirely" finding: first-run setup publishes a
+// whole directory sight-unseen, so it needs the same gate CommitAndPush has.
+func TestInitAndPushBlocksSecret(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "memory.md", "notes\nGL_TOKEN = glpat-ABCDEFGHIJ1234567890\n")
+
+	_, err := InitAndPush(context.Background(), dir, "https://gitlab.com/u/r.git", "cortex: initial", "u", "t")
+	if err == nil {
+		t.Fatal("expected InitAndPush to be blocked, got nil error")
+	}
+	if !strings.Contains(err.Error(), "refusing to commit") {
+		t.Fatalf("error = %v, want it to mention 'refusing to commit'", err)
+	}
+	if !strings.Contains(err.Error(), "memory.md") {
+		t.Fatalf("error = %v, want it to name the offending file", err)
+	}
+
+	// Nothing staged or committed - the repo is left exactly as InitAndPush
+	// found it, same guarantee as CommitAndPush.
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := repo.Head(); err == nil {
+		t.Fatal("expected no HEAD (nothing committed) after a blocked InitAndPush")
+	}
+}
+
+// TestInitAndPushBlocksSecretInMessage covers the message-scan half of the
+// gate for InitAndPush.
+func TestInitAndPushBlocksSecretInMessage(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "notes.md", "clean content\n")
+
+	_, err := InitAndPush(context.Background(), dir, "https://gitlab.com/u/r.git", "cortex: rotate glpat-ABCDEFGHIJ1234567890", "u", "t")
+	if err == nil {
+		t.Fatal("expected InitAndPush to be blocked, got nil error")
+	}
+	if !strings.Contains(err.Error(), "commit message") {
+		t.Fatalf("error = %v, want it to name the commit message as the offending location", err)
+	}
+}
+
 // TestSyncRoundTrip exercises the full lifecycle against a local bare remote:
 // init+push on "device A", clone on "device B", commit+push from B, pull on A.
 // This drives every exported network operation without leaving the machine.
