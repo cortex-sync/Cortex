@@ -19,6 +19,26 @@ GitHub Actions CI, Dependabot, and the goreleaser release pipeline are all green
 
 Open items, grouped by theme. Each becomes a branch + PR.
 
+## Sync / runtime friction (2026-07-06)
+
+From a real `/sync-profile` - full write-up in
+[`docs/notes/2026-07-06-stdio-drive-and-pat-friction.md`](notes/2026-07-06-stdio-drive-and-pat-friction.md).
+
+- **cortex-git tools never reached the session** despite a healthy v0.2.0 binary
+  (verified via `--prefetch` + a direct MCP `initialize`). `/reload-plugins`
+  counted the server but no process ran; reinstall + full restart did not fix it.
+  Suspect `.mcp.json`'s `${CLAUDE_PLUGIN_ROOT:-.}/bin/...` default-form expansion
+  or a fast silent exit. **Do:** confirm host expansion of `${CLAUDE_PLUGIN_ROOT:-.}`
+  (drop the `:-.` if unsupported); make the launcher log startup/exit; add a
+  self-test; document the stdio-drive fallback in `usage.md`.
+- **Expired PAT gave an opaque failure + awkward rotation.** Push failed with the
+  raw provider `Access denied` message; `get_auth_status` confirms a credential
+  *exists* but not that it is valid/unexpired. With the MCP tools not exposed,
+  rotating meant hand-driving `set_credentials` over stdio. **Do:** validity/expiry
+  probe in `get_auth_status`; on auth-denied, hint "token may be expired - rotate
+  via `set_credentials`"; ship a tool-independent set-credentials entrypoint
+  (subcommand or `scripts/set-credentials.sh`) so rotation doesn't need live MCP tools.
+
 ## Gap review (2026-07-03)
 
 Findings from a 4-lens multi-agent gap review (Go server, CI/release/supply chain,
