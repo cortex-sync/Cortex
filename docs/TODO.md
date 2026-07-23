@@ -213,17 +213,29 @@ survived. Highest-leverage cluster first.
       the retry finds a clean tree; the delta is lost with certainty. (The destructive pull
       is M2; the skill *recommending this sequence* is the distinct new hole.) **Fix:** change
       the recovery to a non-destructive path, or gate on M2's safe-pull work.
-- [ ] **(high) Codex reconcile folds back to the wrong file.** restore-profile Tier 1 step b
-      reconciles a differing `AGENTS.md`, but the reconcile procedure's step 5 hardcodes
-      writing the merged `CLAUDE.md` to `[local_path]/CLAUDE.md` - for Codex the merged result
-      should land in `adapters/codex.md`. As written it clobbers the repo's `CLAUDE.md` with
-      AGENTS-shaped content or the fold-back never happens. **Fix:** branch the write target by
-      platform; extend `docs/profile-merge-sketch.md` to the AGENTS.md cell.
-- [ ] **(medium) `install-codex.sh` re-run clobbers a newer non-managed `AGENTS.md`.**
-      `backup_existing` (lines 152-157) returns early when `$dest.cortex-bak` exists, then
-      `cp "$src" "$dest"` (line 167) overwrites a user-edited/reconciled AGENTS.md with no fresh
-      backup. `--uninstall` (108-116) similarly restores over a marker-managed-but-user-edited
-      file without saving it. **Fix:** detect content drift before overwrite; save-before-restore.
+- [x] **(done, branch `fix/skills-data-loss-highs`) (high) Codex reconcile folds back to
+      the wrong file.** restore-profile Tier 1 step b reconciles a differing `AGENTS.md`, but
+      the reconcile procedure's step 5 hardcoded writing the merged result to
+      `[local_path]/CLAUDE.md` - for Codex the merged result should land in
+      `adapters/codex.md`. **Fix:** step 5 now branches the fold-back target by which
+      instruction file triggered the reconcile (`CLAUDE.md` for Claude Code/Cowork,
+      `adapters/codex.md` for Codex) instead of always writing `CLAUDE.md`.
+      `docs/profile-merge-sketch.md` extended with an "AGENTS.md cell" section documenting
+      the second write-target row. Doc-only change, no Go/script code.
+- [x] **(done, branch `fix/skills-data-loss-highs`) (medium) `install-codex.sh` re-run
+      clobbers a newer non-managed `AGENTS.md`.** `backup_existing` returned early whenever
+      `$dest.cortex-bak` already existed, before even checking whether `$dest` had drifted
+      since Cortex last wrote it; `--uninstall` used marker-line presence as its only drift
+      signal, which survives a user editing everything else in the file. **Fix:** both paths
+      now compare `$dest` against a new `$dest.cortex-last` snapshot (exactly what Cortex
+      wrote last time, refreshed on every write) instead of relying on "a backup exists" or
+      "the marker survives" as proxies for "unchanged". A re-run that finds real drift saves
+      it to `$dest.cortex-drifted-<timestamp>` before overwriting; `--uninstall` saves it to
+      `$dest.cortex-pre-uninstall` before restoring the original. New regression test
+      `scripts/test-install-codex.sh` (`make test-install-codex`, wired into CI as a new
+      `install-codex` job) covers fresh install, backup-once, no-false-drift-on-unchanged-
+      rerun, the marker-survives-but-content-drifted regression itself, and both uninstall
+      paths - confirmed it fails 3/6 against the pre-fix script and passes 6/6 after.
 
 ### Skills - flow holes (NEW unless noted)
 

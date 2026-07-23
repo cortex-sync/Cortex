@@ -115,6 +115,17 @@ jobs:
       - name: launcher SHA-256 integrity test
         run: make test-launcher
 
+  install-codex:
+    runs-on: ubuntu-latest
+    # Pure-shell test against a fixture AGENTS.md; no Go toolchain or Codex binary needed.
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install-codex.sh AGENTS.md drift-handling test
+        run: make test-install-codex
+
   sast:
     runs-on: ubuntu-latest
     # security-events: write lets us publish gosec findings to the Security tab.
