@@ -181,6 +181,104 @@ func TestGitNetworkHandlersOperationError(t *testing.T) {
 	}
 }
 
+// TestRequiredMessageArg checks that commit_push and init reject a missing
+// commit message before touching credentials or the network. mcp-go v0.18.0's
+// handleToolCall does not itself enforce mcp.Required() - without this check a
+// caller omitting "message" would silently commit and push with an empty one.
+func TestRequiredMessageArg(t *testing.T) {
+	allowTempPaths(t)
+	cases := []struct {
+		name string
+		h    handler
+		args map[string]interface{}
+	}{
+		{"commit_push", gitCommitPushHandler, map[string]interface{}{
+			// repo_path need not even be a real repo - the message check runs
+			// before RemoteHost, so this must fail without reaching it.
+			"repo_path": filepath.Join(t.TempDir(), "not-a-repo"),
+		}},
+		{"init", gitInitHandler, map[string]interface{}{
+			"remote_url": "https://reqmsg.example/u/r.git",
+			"local_path": t.TempDir(),
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := call(t, tc.h, tc.args)
+			if !res.IsError {
+				t.Fatalf("%s with no message: want IsError, got %q", tc.name, resultText(t, res))
+			}
+			if txt := resultText(t, res); !strings.Contains(txt, "message is required") {
+				t.Fatalf("%s error = %q, want 'message is required'", tc.name, txt)
+			}
+			if strings.Contains(resultText(t, res), "could not determine remote host") {
+				t.Fatalf("%s: reached RemoteHost - the message check should have stopped it first", tc.name)
+			}
+		})
+	}
+}
+
+// TestSetCredentialsHandlerRequiresUsernameAndToken checks that a missing or
+// empty username/token is rejected rather than silently stored. This is the
+// concrete example from the mcp-go required-arg gap: set_credentials with no
+// token would otherwise store an empty one with no error.
+func TestSetCredentialsHandlerRequiresUsernameAndToken(t *testing.T) {
+	const host = "reqcreds.example"
+	t.Cleanup(func() { _ = keychain.DeleteCredentials(host) })
+
+	cases := []struct {
+		name string
+		args map[string]interface{}
+		want string
+	}{
+		{"missing username", map[string]interface{}{"host": host, "token": "tok"}, "username is required"},
+		{"empty username", map[string]interface{}{"host": host, "username": "", "token": "tok"}, "username is required"},
+		{"missing token", map[string]interface{}{"host": host, "username": "user"}, "token is required"},
+		{"empty token", map[string]interface{}{"host": host, "username": "user", "token": ""}, "token is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := call(t, setCredentialsHandler, tc.args)
+			if !res.IsError {
+				t.Fatalf("%s: want IsError, got %q", tc.name, resultText(t, res))
+			}
+			if txt := resultText(t, res); !strings.Contains(txt, tc.want) {
+				t.Fatalf("%s: result = %q, want it to contain %q", tc.name, txt, tc.want)
+			}
+		})
+	}
+
+	// None of the rejected calls above should have stored anything.
+	if _, _, errRes := resolveCreds(host); errRes == nil {
+		t.Fatal("resolveCreds after rejected set_credentials calls: want an error result (nothing should be stored), got nil")
+	}
+}
+
+// TestSetCredentialsHandlerRejectsEmptyTokenWithoutClobbering is the concrete
+// clobber scenario: a working credential must survive a set_credentials call
+// that omits the token, not be silently overwritten with an empty one.
+func TestSetCredentialsHandlerRejectsEmptyTokenWithoutClobbering(t *testing.T) {
+	const host = "noclobber.example"
+	t.Cleanup(func() { _ = keychain.DeleteCredentials(host) })
+
+	if err := keychain.SetCredentials(host, "good-user", "good-tok"); err != nil {
+		t.Fatalf("SetCredentials: %v", err)
+	}
+
+	res := call(t, setCredentialsHandler, map[string]interface{}{"host": host, "username": "good-user"})
+	if !res.IsError {
+		t.Fatalf("set_credentials with no token: want IsError, got %q", resultText(t, res))
+	}
+
+	user, token, errRes := resolveCreds(host)
+	if errRes != nil {
+		t.Fatalf("resolveCreds after rejected set_credentials: unexpected error result %q", resultText(t, errRes))
+	}
+	if user != "good-user" || token != "good-tok" {
+		t.Fatalf("resolved = (%q, %q), want the original (good-user, good-tok) untouched", user, token)
+	}
+}
+
 // TestSetCredentialsHandlerStores covers the set_credentials success path (no
 // environment override) and confirms the stored PAT round-trips through
 // resolveCreds.
