@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -40,8 +41,14 @@ func Status(repoPath string) (string, error) {
 	if status.IsClean() {
 		return "nothing to commit, working tree clean", nil
 	}
+	paths := make([]string, 0, len(status))
+	for path := range status {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
 	var buf bytes.Buffer
-	for path, s := range status {
+	for _, path := range paths {
+		s := status[path]
 		fmt.Fprintf(&buf, "%c%c %s\n", s.Staging, s.Worktree, path)
 	}
 	return buf.String(), nil

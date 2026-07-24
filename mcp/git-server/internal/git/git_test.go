@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,42 @@ func TestStatus(t *testing.T) {
 	}
 	if !strings.Contains(got, "active.md") {
 		t.Fatalf("Status (dirty) = %q, want it to list active.md", got)
+	}
+}
+
+// TestStatusOutputIsSorted checks that Status output is deterministically
+// ordered rather than following Go's randomised map iteration - several
+// untracked files, spanning both ends of alphabetical order, are checked
+// across repeated calls so a flaky pass (map order can coincidentally match
+// once) doesn't hide a regression.
+func TestStatusOutputIsSorted(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := gogit.PlainInit(dir, false); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	names := []string{"zebra.md", "active.md", "memory.md", "aardvark.md"}
+	for _, n := range names {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+
+	for range 5 {
+		got, err := Status(dir)
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+		if len(lines) != len(names) {
+			t.Fatalf("Status lines = %v, want %d lines", lines, len(names))
+		}
+		for i, line := range lines {
+			if !strings.HasSuffix(line, sorted[i]) {
+				t.Fatalf("Status line %d = %q, want it to end with %q (sorted order)", i, line, sorted[i])
+			}
+		}
 	}
 }
 

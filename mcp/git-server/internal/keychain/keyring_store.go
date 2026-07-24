@@ -13,12 +13,25 @@ type keyringStore struct{}
 
 func (keyringStore) kind() string { return "keychain" }
 
-// Set stores the username and token for the given host.
+// keyringSet is keyring.Set, indirected so a test can simulate one call of a
+// pair failing while the other succeeds - something go-keyring's own mock
+// (MockInitWithError is all-or-nothing) cannot produce.
+var keyringSet = keyring.Set
+
+// Set stores the username and token for the given host. The two entries can't
+// be written atomically (go-keyring has no multi-key transaction), so if the
+// username write succeeds but the token write then fails, best-effort delete
+// the username again rather than leave it dangling - otherwise a later Get
+// would find the username entry but not the token, surface a confusing
+// backend error instead of ErrNotFound, and leave sync blocked until a manual
+// delete_credentials. The cleanup's own error is deliberately ignored: the
+// original token-write error is what the caller needs to see.
 func (keyringStore) Set(host, username, token string) error {
-	if err := keyring.Set(service, hostUsernameKey(host), username); err != nil {
+	if err := keyringSet(service, hostUsernameKey(host), username); err != nil {
 		return fmt.Errorf("storing username: %w", err)
 	}
-	if err := keyring.Set(service, hostTokenKey(host), token); err != nil {
+	if err := keyringSet(service, hostTokenKey(host), token); err != nil {
+		_ = keyring.Delete(service, hostUsernameKey(host))
 		return fmt.Errorf("storing token: %w", err)
 	}
 	return nil

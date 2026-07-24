@@ -188,3 +188,38 @@ func TestKeyringUnavailableSelectsFile(t *testing.T) {
 		t.Fatalf("Backend() = %q, want file", got)
 	}
 }
+
+// TestKeyringStoreSetCleansUpUsernameOnTokenFailure covers keyringStore.Set's
+// partial-failure guard: go-keyring's own mock can only fail every call or
+// none, so keyringSet is swapped for a stub that fails only on the second
+// (token) write - the exact shape that used to leave a dangling username
+// entry behind, making a later Get return a confusing backend error instead
+// of ErrNotFound.
+func TestKeyringStoreSetCleansUpUsernameOnTokenFailure(t *testing.T) {
+	keyring.MockInit()
+	const host = "partial-failure.example"
+
+	calls := 0
+	original := keyringSet
+	keyringSet = func(service, user, pass string) error {
+		calls++
+		if calls == 2 { // the token write
+			return errors.New("simulated token-write failure")
+		}
+		return original(service, user, pass)
+	}
+	t.Cleanup(func() { keyringSet = original })
+
+	if err := (keyringStore{}).Set(host, "user", "tok"); err == nil {
+		t.Fatal("Set: want the simulated token-write error, got nil")
+	}
+
+	// Check the username entry directly, not via keyringStore.Get: Get looks up
+	// username then token in sequence and would return ErrNotFound anyway just
+	// because the token entry is missing, regardless of whether the username
+	// entry was actually cleaned up - that would make this test pass even
+	// without the fix. Query the username key on its own to prove it's gone.
+	if _, err := keyring.Get(service, hostUsernameKey(host)); !errors.Is(err, keyring.ErrNotFound) {
+		t.Fatalf("username entry after a partial failure: err = %v, want keyring.ErrNotFound (it should have been cleaned up, not left dangling)", err)
+	}
+}
