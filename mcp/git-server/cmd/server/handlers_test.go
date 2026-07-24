@@ -192,14 +192,23 @@ func TestRequiredMessageArg(t *testing.T) {
 		h    handler
 		args map[string]interface{}
 	}{
-		{"commit_push", gitCommitPushHandler, map[string]interface{}{
+		{"commit_push missing", gitCommitPushHandler, map[string]interface{}{
 			// repo_path need not even be a real repo - the message check runs
 			// before RemoteHost, so this must fail without reaching it.
 			"repo_path": filepath.Join(t.TempDir(), "not-a-repo"),
 		}},
-		{"init", gitInitHandler, map[string]interface{}{
+		{"commit_push whitespace-only", gitCommitPushHandler, map[string]interface{}{
+			"repo_path": filepath.Join(t.TempDir(), "not-a-repo"),
+			"message":   "   \n\t",
+		}},
+		{"init missing", gitInitHandler, map[string]interface{}{
 			"remote_url": "https://reqmsg.example/u/r.git",
 			"local_path": t.TempDir(),
+		}},
+		{"init whitespace-only", gitInitHandler, map[string]interface{}{
+			"remote_url": "https://reqmsg.example/u/r.git",
+			"local_path": t.TempDir(),
+			"message":    "   ",
 		}},
 	}
 	for _, tc := range cases {
@@ -233,8 +242,10 @@ func TestSetCredentialsHandlerRequiresUsernameAndToken(t *testing.T) {
 	}{
 		{"missing username", map[string]interface{}{"host": host, "token": "tok"}, "username is required"},
 		{"empty username", map[string]interface{}{"host": host, "username": "", "token": "tok"}, "username is required"},
+		{"whitespace-only username", map[string]interface{}{"host": host, "username": "  \t", "token": "tok"}, "username is required"},
 		{"missing token", map[string]interface{}{"host": host, "username": "user"}, "token is required"},
 		{"empty token", map[string]interface{}{"host": host, "username": "user", "token": ""}, "token is required"},
+		{"whitespace-only token", map[string]interface{}{"host": host, "username": "user", "token": "   "}, "token is required"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,24 +269,43 @@ func TestSetCredentialsHandlerRequiresUsernameAndToken(t *testing.T) {
 // clobber scenario: a working credential must survive a set_credentials call
 // that omits the token, not be silently overwritten with an empty one.
 func TestSetCredentialsHandlerRejectsEmptyTokenWithoutClobbering(t *testing.T) {
-	const host = "noclobber.example"
-	t.Cleanup(func() { _ = keychain.DeleteCredentials(host) })
-
-	if err := keychain.SetCredentials(host, "good-user", "good-tok"); err != nil {
-		t.Fatalf("SetCredentials: %v", err)
+	// A missing token and a whitespace-only one must both be rejected: a fable-
+	// agent adversarial review found that requireStringArg's original v == ""
+	// check let " " through as "non-empty", re-opening this exact clobber with
+	// one space. requireStringArg now checks strings.TrimSpace(v) == "".
+	cases := []struct {
+		name string
+		args map[string]interface{}
+	}{
+		{"missing token", map[string]interface{}{}},
+		{"whitespace-only token", map[string]interface{}{"token": "  \n"}},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			host := "noclobber-" + strings.ReplaceAll(tc.name, " ", "-") + ".example"
+			t.Cleanup(func() { _ = keychain.DeleteCredentials(host) })
 
-	res := call(t, setCredentialsHandler, map[string]interface{}{"host": host, "username": "good-user"})
-	if !res.IsError {
-		t.Fatalf("set_credentials with no token: want IsError, got %q", resultText(t, res))
-	}
+			if err := keychain.SetCredentials(host, "good-user", "good-tok"); err != nil {
+				t.Fatalf("SetCredentials: %v", err)
+			}
 
-	user, token, errRes := resolveCreds(host)
-	if errRes != nil {
-		t.Fatalf("resolveCreds after rejected set_credentials: unexpected error result %q", resultText(t, errRes))
-	}
-	if user != "good-user" || token != "good-tok" {
-		t.Fatalf("resolved = (%q, %q), want the original (good-user, good-tok) untouched", user, token)
+			args := map[string]interface{}{"host": host, "username": "good-user"}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			res := call(t, setCredentialsHandler, args)
+			if !res.IsError {
+				t.Fatalf("set_credentials %s: want IsError, got %q", tc.name, resultText(t, res))
+			}
+
+			user, token, errRes := resolveCreds(host)
+			if errRes != nil {
+				t.Fatalf("resolveCreds after rejected set_credentials: unexpected error result %q", resultText(t, errRes))
+			}
+			if user != "good-user" || token != "good-tok" {
+				t.Fatalf("resolved = (%q, %q), want the original (good-user, good-tok) untouched", user, token)
+			}
+		})
 	}
 }
 

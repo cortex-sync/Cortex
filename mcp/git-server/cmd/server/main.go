@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -155,7 +156,14 @@ func stringArg(req mcp.CallToolRequest, name string) string {
 // instead of failing loudly.
 func requireStringArg(req mcp.CallToolRequest, name string) (string, *mcp.CallToolResult) {
 	v := stringArg(req, name)
-	if v == "" {
+	// TrimSpace only for the emptiness check, not the returned value: a
+	// whitespace-only message/username/token (" ", "\n") must not sail through
+	// as "non-empty" - for set_credentials that would silently store a
+	// whitespace credential, clobbering a working one with no error, exactly
+	// the failure mode this helper exists to close. Returning v unmodified (not
+	// the trimmed form) avoids rewriting real content that merely has
+	// incidental leading/trailing whitespace as part of it.
+	if strings.TrimSpace(v) == "" {
 		return "", mcp.NewToolResultError(fmt.Sprintf("%s is required", name))
 	}
 	return v, nil

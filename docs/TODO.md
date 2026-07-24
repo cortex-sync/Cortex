@@ -133,7 +133,14 @@ survived. Highest-leverage cluster first.
       `handlers_test.go`: commit_push/init reject a missing message before ever reaching
       `RemoteHost` (no repo/network needed); set_credentials rejects a missing *or* empty
       username/token; and the concrete clobber scenario - a working credential survives a
-      set_credentials call that omits the token.
+      set_credentials call that omits the token. **A fable-agent adversarial review of this
+      fix then found `requireStringArg` checked `v == ""` only, so a whitespace-only value
+      (`" "`, `"\n"`) passed through as "non-empty" - re-opening the exact clobber the fix's
+      own test is named after with one space. Closed in the same PR:** the check now uses
+      `strings.TrimSpace(v) == ""` while still returning the untrimmed value (so real content
+      with incidental leading/trailing whitespace isn't silently rewritten). Regression tests
+      extended with whitespace-only variants for message/username/token, each confirmed to
+      fail against the pre-fix `v == ""` check and pass after.
 - [ ] **(low) `keyringStore.Set` is a non-atomic two-entry write.** `keyring_store.go:17-25`
       - if the username write succeeds and the token write fails, a later `Get` returns a
       backend error (not `ErrNotFound`), so `get_auth_status` reports a scary failure and
