@@ -123,8 +123,13 @@ if [ "$uninstall" -eq 1 ]; then
 		# last wrote (a user edit, or an external reconcile), preserve that content
 		# before restoring the pre-Cortex backup over it.
 		if [ -e "$dest" ] && ! is_unchanged; then
-			cp "$dest" "$dest.cortex-pre-uninstall"
-			echo "install-codex: current AGENTS.md changed since Cortex last wrote it; saved it to $dest.cortex-pre-uninstall before restoring" >&2
+			# Timestamped + PID-suffixed like the reinstall drift file: a fixed name
+			# here would let a second drift-then-uninstall cycle silently overwrite
+			# and destroy the first cycle's saved copy - the exact loss this file
+			# exists to prevent.
+			pre_uninstall="$dest.cortex-pre-uninstall-$(date +%Y%m%d%H%M%S)-$$"
+			cp "$dest" "$pre_uninstall"
+			echo "install-codex: current AGENTS.md changed since Cortex last wrote it; saved it to $pre_uninstall before restoring" >&2
 		fi
 		mv "$dest.cortex-bak" "$dest"
 		rm -f "$dest.cortex-last"
@@ -170,13 +175,26 @@ if [ -n "$profile_dir" ]; then
 	#    replaces a marker-presence check: the marker line alone survives edits to
 	#    everything else in the file, so it cannot detect this drift.
 	snapshot_before_overwrite() {
-		if [ ! -e "$dest.cortex-bak" ]; then
+		# $dest can only be a genuine pre-Cortex original if Cortex has NEVER
+		# written to this path before - checking .cortex-bak alone is not enough:
+		# a fresh install (no pre-existing file, so no bak was needed) followed by
+		# an immediate re-run would otherwise see "no bak yet" and back up its own
+		# prior output as if it were the user's original, which --uninstall would
+		# later restore - silently defeating uninstall on an entirely ordinary
+		# install-then-reinstall-then-uninstall sequence. .cortex-last existing at
+		# all (regardless of whether it still matches $1) proves Cortex has been
+		# here before, so it - not just .cortex-bak - gates the "genuine original"
+		# branch.
+		if [ ! -e "$dest.cortex-bak" ] && [ ! -e "$dest.cortex-last" ]; then
 			cp "$1" "$dest.cortex-bak"
 			echo "install-codex: backed up existing AGENTS.md to $dest.cortex-bak"
 			return 0
 		fi
 		if [ ! -e "$dest.cortex-last" ] || ! cmp -s "$1" "$dest.cortex-last"; then
-			drift="$dest.cortex-drifted-$(date +%Y%m%d%H%M%S)"
+			# $$ (this invocation's PID) keeps two drifting re-runs within the same
+			# second from silently overwriting each other's saved copy - date alone
+			# is only second-resolution.
+			drift="$dest.cortex-drifted-$(date +%Y%m%d%H%M%S)-$$"
 			cp "$1" "$drift"
 			echo "install-codex: $dest changed since Cortex last wrote it - saved the current content to $drift before overwriting" >&2
 		fi
