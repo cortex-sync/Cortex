@@ -114,9 +114,12 @@ func TestGitNetworkHandlersMissingCreds(t *testing.T) {
 // access. This covers the post-credential path (gitOpContext + the igit call +
 // result handling) that the bad-host and missing-creds tests above stop short of.
 //
-// commit_push is deliberately not exercised here: it always attempts a push (to
-// flush unpushed commits) so it cannot fail before the network without a fragile
-// setup - its round-trip is covered by the e2e test in CI instead.
+// commit_push is deliberately not exercised here: a CLEAN repo always attempts
+// a push (to flush unpushed commits), so it cannot fail before the network
+// without a fragile setup - a happy-path round-trip is covered by the e2e test
+// in CI instead. Its own operation-error path (a DIRTY repo blocked by the
+// secret-scan gate, which fires before any push attempt) is covered separately
+// by TestGitCommitPushHandlerBlockedBySecretScan below.
 func TestGitNetworkHandlersOperationError(t *testing.T) {
 	allowTempPaths(t)
 	// A local path that is already a git repo makes PlainCloneContext fail with
@@ -178,6 +181,38 @@ func TestGitNetworkHandlersOperationError(t *testing.T) {
 				t.Fatalf("%s: stopped at an early gate (%q); operation path not exercised", tc.name, txt)
 			}
 		})
+	}
+}
+
+// TestGitCommitPushHandlerBlockedBySecretScan drives commit_push PAST the host
+// and credential gates and into CommitAndPush itself, deterministically and
+// without any network: the secret-scan gate inside CommitAndPush fires before
+// staging/committing/pushing, so a file containing a credential-shaped string
+// fails the operation before it ever attempts a push - unlike a clean repo
+// (see TestGitNetworkHandlersOperationError's docstring), which always tries
+// to push and so needs a reachable remote.
+func TestGitCommitPushHandlerBlockedBySecretScan(t *testing.T) {
+	allowTempPaths(t)
+	const host = "blocked.example"
+	if err := keychain.SetCredentials(host, "user", "tok"); err != nil {
+		t.Fatalf("SetCredentials: %v", err)
+	}
+	t.Cleanup(func() { _ = keychain.DeleteCredentials(host) })
+
+	repo := repoWithRemote(t, "https://"+host+"/u/r.git")
+	if err := os.WriteFile(filepath.Join(repo, "memory.md"), []byte("GL_TOKEN = glpat-ABCDEFGHIJ1234567890\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := call(t, gitCommitPushHandler, map[string]interface{}{
+		"repo_path": repo,
+		"message":   "cortex: update",
+	})
+	if !res.IsError {
+		t.Fatalf("commit_push with a secret in a file: want IsError, got %q", resultText(t, res))
+	}
+	if txt := resultText(t, res); !strings.Contains(txt, "refusing to commit") {
+		t.Fatalf("result = %q, want it to mention 'refusing to commit'", txt)
 	}
 }
 

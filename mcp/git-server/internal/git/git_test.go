@@ -606,6 +606,48 @@ func TestSyncRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPullNonRepo checks Pull's PlainOpen error path on a directory that is
+// not a git repository at all.
+func TestPullNonRepo(t *testing.T) {
+	if _, err := Pull(context.Background(), t.TempDir(), "u", "t", false); err == nil {
+		t.Fatal("Pull on a non-repo dir should error")
+	}
+}
+
+// TestPullDetachedHead checks Pull's guard against a detached HEAD: with no
+// branch to fast-forward or reset, Pull has no defined behaviour for this
+// state, so it must refuse cleanly rather than do something undefined.
+func TestPullDetachedHead(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	writeFile(t, dir, "CLAUDE.md", "v1\n")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	if _, err := wt.Add("CLAUDE.md"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	commit, err := wt.Commit("initial", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "t", Email: "t@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := wt.Checkout(&gogit.CheckoutOptions{Hash: commit}); err != nil {
+		t.Fatalf("checkout detached: %v", err)
+	}
+
+	if _, err := Pull(context.Background(), dir, "u", "t", false); err == nil {
+		t.Fatal("Pull with a detached HEAD should error")
+	} else if !strings.Contains(err.Error(), "not on a branch") {
+		t.Fatalf("error = %v, want it to mention 'not on a branch'", err)
+	}
+}
+
 // TestPullLastWriteWinsOnDivergence is the real test of the documented
 // "last-write-wins" semantics: device A has BOTH a diverging local commit and a
 // dirty (uncommitted) worktree, while origin has advanced independently. A plain

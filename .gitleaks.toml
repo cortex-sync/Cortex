@@ -23,4 +23,5 @@ description = "Intentional fake secrets in the secret-scanner test fixtures"
 paths = [
   '''mcp/git-server/internal/secretscan/secretscan_test\.go''',
   '''mcp/git-server/internal/git/git_test\.go''',
+  '''mcp/git-server/cmd/server/handlers_test\.go''',
 ]

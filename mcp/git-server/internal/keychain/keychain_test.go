@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -222,4 +223,132 @@ func TestKeyringStoreSetCleansUpUsernameOnTokenFailure(t *testing.T) {
 	if _, err := keyring.Get(service, hostUsernameKey(host)); !errors.Is(err, keyring.ErrNotFound) {
 		t.Fatalf("username entry after a partial failure: err = %v, want keyring.ErrNotFound (it should have been cleaned up, not left dangling)", err)
 	}
+}
+
+// TestKeyringStoreSetUsernameWriteFails covers the first-call failure branch
+// of Set (distinct from the token-write branch above): nothing has been
+// written yet, so there is nothing to clean up, and the error must name the
+// username write specifically.
+func TestKeyringStoreSetUsernameWriteFails(t *testing.T) {
+	keyring.MockInit()
+
+	original := keyringSet
+	keyringSet = func(service, user, pass string) error {
+		return errors.New("simulated username-write failure")
+	}
+	t.Cleanup(func() { keyringSet = original })
+
+	err := (keyringStore{}).Set("username-write-fails.example", "user", "tok")
+	if err == nil {
+		t.Fatal("Set: want the simulated username-write error, got nil")
+	}
+	if !strings.Contains(err.Error(), "storing username") {
+		t.Fatalf("error = %v, want it to mention 'storing username'", err)
+	}
+}
+
+// TestKeyringStoreGetBackendErrors covers Get's two non-ErrNotFound backend-
+// error branches (username lookup, token lookup) and the asymmetric case
+// where the username exists but the token entry does not - all three paths
+// go-keyring's mock alone cannot produce, hence the keyringGet indirection.
+func TestKeyringStoreGetBackendErrors(t *testing.T) {
+	keyring.MockInit()
+
+	t.Run("username lookup backend error", func(t *testing.T) {
+		original := keyringGet
+		keyringGet = func(service, user string) (string, error) {
+			return "", errors.New("simulated backend error")
+		}
+		t.Cleanup(func() { keyringGet = original })
+
+		_, _, err := (keyringStore{}).Get("get-username-error.example")
+		if err == nil || errors.Is(err, ErrNotFound) {
+			t.Fatalf("Get: err = %v, want a wrapped backend error (not ErrNotFound, not nil)", err)
+		}
+		if !strings.Contains(err.Error(), "retrieving username") {
+			t.Fatalf("error = %v, want it to mention 'retrieving username'", err)
+		}
+	})
+
+	t.Run("token lookup not found (asymmetric state)", func(t *testing.T) {
+		const host = "get-token-missing.example"
+		if err := keyring.Set(service, hostUsernameKey(host), "user"); err != nil {
+			t.Fatalf("seeding username entry: %v", err)
+		}
+		t.Cleanup(func() { _ = keyring.Delete(service, hostUsernameKey(host)) })
+
+		_, _, err := (keyringStore{}).Get(host)
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Get with username present but token missing: err = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("token lookup backend error", func(t *testing.T) {
+		const host = "get-token-error.example"
+		if err := keyring.Set(service, hostUsernameKey(host), "user"); err != nil {
+			t.Fatalf("seeding username entry: %v", err)
+		}
+		t.Cleanup(func() { _ = keyring.Delete(service, hostUsernameKey(host)) })
+
+		original := keyringGet
+		keyringGet = func(service, user string) (string, error) {
+			if user == hostTokenKey(host) {
+				return "", errors.New("simulated backend error")
+			}
+			return original(service, user)
+		}
+		t.Cleanup(func() { keyringGet = original })
+
+		_, _, err := (keyringStore{}).Get(host)
+		if err == nil || errors.Is(err, ErrNotFound) {
+			t.Fatalf("Get: err = %v, want a wrapped backend error (not ErrNotFound, not nil)", err)
+		}
+		if !strings.Contains(err.Error(), "retrieving token") {
+			t.Fatalf("error = %v, want it to mention 'retrieving token'", err)
+		}
+	})
+}
+
+// TestKeyringStoreDeleteBackendErrors covers Delete's two non-ErrNotFound
+// backend-error branches. A genuine backend failure (locked keyring) must be
+// surfaced, distinct from the already-tested idempotent "nothing to delete"
+// (ErrNotFound) case.
+func TestKeyringStoreDeleteBackendErrors(t *testing.T) {
+	keyring.MockInit()
+
+	t.Run("username delete backend error", func(t *testing.T) {
+		original := keyringDelete
+		keyringDelete = func(service, user string) error {
+			return errors.New("simulated backend error")
+		}
+		t.Cleanup(func() { keyringDelete = original })
+
+		err := (keyringStore{}).Delete("delete-username-error.example")
+		if err == nil {
+			t.Fatal("Delete: want the simulated backend error, got nil")
+		}
+		if !strings.Contains(err.Error(), "deleting username") {
+			t.Fatalf("error = %v, want it to mention 'deleting username'", err)
+		}
+	})
+
+	t.Run("token delete backend error", func(t *testing.T) {
+		const host = "delete-token-error.example"
+		original := keyringDelete
+		keyringDelete = func(service, user string) error {
+			if user == hostTokenKey(host) {
+				return errors.New("simulated backend error")
+			}
+			return original(service, user)
+		}
+		t.Cleanup(func() { keyringDelete = original })
+
+		err := (keyringStore{}).Delete(host)
+		if err == nil {
+			t.Fatal("Delete: want the simulated backend error, got nil")
+		}
+		if !strings.Contains(err.Error(), "deleting token") {
+			t.Fatalf("error = %v, want it to mention 'deleting token'", err)
+		}
+	})
 }

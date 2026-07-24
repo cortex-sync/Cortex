@@ -13,10 +13,15 @@ type keyringStore struct{}
 
 func (keyringStore) kind() string { return "keychain" }
 
-// keyringSet is keyring.Set, indirected so a test can simulate one call of a
-// pair failing while the other succeeds - something go-keyring's own mock
-// (MockInitWithError is all-or-nothing) cannot produce.
-var keyringSet = keyring.Set
+// keyringSet, keyringGet, and keyringDelete are keyring.Set/Get/Delete,
+// indirected so a test can simulate one call of a pair failing while the
+// other succeeds - something go-keyring's own mock (MockInitWithError is
+// all-or-nothing across every call) cannot produce.
+var (
+	keyringSet    = keyring.Set
+	keyringGet    = keyring.Get
+	keyringDelete = keyring.Delete
+)
 
 // Set stores the username and token for the given host. The two entries can't
 // be written atomically (go-keyring has no multi-key transaction), so if the
@@ -31,7 +36,7 @@ func (keyringStore) Set(host, username, token string) error {
 		return fmt.Errorf("storing username: %w", err)
 	}
 	if err := keyringSet(service, hostTokenKey(host), token); err != nil {
-		_ = keyring.Delete(service, hostUsernameKey(host))
+		_ = keyringDelete(service, hostUsernameKey(host))
 		return fmt.Errorf("storing token: %w", err)
 	}
 	return nil
@@ -39,14 +44,14 @@ func (keyringStore) Set(host, username, token string) error {
 
 // Get retrieves the username and token for the given host.
 func (keyringStore) Get(host string) (username, token string, err error) {
-	username, err = keyring.Get(service, hostUsernameKey(host))
+	username, err = keyringGet(service, hostUsernameKey(host))
 	if err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
 			return "", "", ErrNotFound
 		}
 		return "", "", fmt.Errorf("retrieving username for %s: %w", host, err)
 	}
-	token, err = keyring.Get(service, hostTokenKey(host))
+	token, err = keyringGet(service, hostTokenKey(host))
 	if err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
 			return "", "", ErrNotFound
@@ -58,10 +63,10 @@ func (keyringStore) Get(host string) (username, token string, err error) {
 
 // Delete removes the stored credentials for the given host.
 func (keyringStore) Delete(host string) error {
-	if err := keyring.Delete(service, hostUsernameKey(host)); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+	if err := keyringDelete(service, hostUsernameKey(host)); err != nil && !errors.Is(err, keyring.ErrNotFound) {
 		return fmt.Errorf("deleting username: %w", err)
 	}
-	if err := keyring.Delete(service, hostTokenKey(host)); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+	if err := keyringDelete(service, hostTokenKey(host)); err != nil && !errors.Is(err, keyring.ErrNotFound) {
 		return fmt.Errorf("deleting token: %w", err)
 	}
 	return nil
