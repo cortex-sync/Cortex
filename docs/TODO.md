@@ -116,13 +116,31 @@ survived. Highest-leverage cluster first.
 
 ### Tool-surface hardening (NEW)
 
-- [ ] **(medium) No schema/required-arg validation before handlers run - the `stringArg`
-      comment is false.** `main.go:136-141` claims "Required arguments are enforced by the
-      tool schema"; mcp-go v0.18.0 `handleToolCall` calls the handler with no arg checking
-      (verified). So `git_commit_push` with a missing `message` commits + pushes an
-      empty-message commit; missing paths flow as `""` into go-git; `set_credentials` with
-      no token stores an empty token. **Fix:** validate non-empty required args per handler
-      (or `req.RequireString`), and fix the comment.
+- [x] **(done, branch `fix/required-arg-validation`) (medium) No schema/required-arg
+      validation before handlers run - the `stringArg` comment was false.** `main.go`
+      claimed "Required arguments are enforced by the tool schema"; mcp-go v0.18.0
+      `handleToolCall` calls the handler with no arg checking (verified). Checked each
+      "required" arg against what actually protects it downstream: `repo_path`/`local_path`
+      already reject `""` via `confinePath`, `remote_url` via `RequireHTTPS`, `host` via
+      `hostcanon.Canonicalize` (all from the earlier M1/M2/L4 passes) - so the real gaps were
+      narrower than the finding implied: `message` (`git_commit_push`/`git_init` would commit
+      + push with an empty message) and `username`/`token` (`set_credentials` would silently
+      store an empty one, clobbering a working credential with no error). **Fix:** new
+      `requireStringArg` helper (mirrors `confinedPathArg`/`resolveCreds` - returns a
+      ready-to-return MCP error result), applied to those three args; `stringArg`'s comment
+      corrected to describe the real mcp-go behaviour and point at `requireStringArg` for
+      anything that must not silently proceed on `""`. Regression tests in
+      `handlers_test.go`: commit_push/init reject a missing message before ever reaching
+      `RemoteHost` (no repo/network needed); set_credentials rejects a missing *or* empty
+      username/token; and the concrete clobber scenario - a working credential survives a
+      set_credentials call that omits the token. **A fable-agent adversarial review of this
+      fix then found `requireStringArg` checked `v == ""` only, so a whitespace-only value
+      (`" "`, `"\n"`) passed through as "non-empty" - re-opening the exact clobber the fix's
+      own test is named after with one space. Closed in the same PR:** the check now uses
+      `strings.TrimSpace(v) == ""` while still returning the untrimmed value (so real content
+      with incidental leading/trailing whitespace isn't silently rewritten). Regression tests
+      extended with whitespace-only variants for message/username/token, each confirmed to
+      fail against the pre-fix `v == ""` check and pass after.
 - [ ] **(low) `keyringStore.Set` is a non-atomic two-entry write.** `keyring_store.go:17-25`
       - if the username write succeeds and the token write fails, a later `Get` returns a
       backend error (not `ErrNotFound`), so `get_auth_status` reports a scary failure and

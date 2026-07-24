@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -134,11 +135,38 @@ func gitOpContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, gitOpTimeout())
 }
 
-// stringArg returns the named string argument, or "" if absent. Required
-// arguments are enforced by the tool schema before a handler runs.
+// stringArg returns the named string argument, or "" if absent. mcp-go
+// v0.18.0's handleToolCall does not itself enforce mcp.Required() (verified) -
+// a caller can omit a "required" argument and every handler still sees "" for
+// it. Path arguments (confinedPathArg), remote_url (RequireHTTPS), and host
+// (hostcanon.Canonicalize, reached via resolveCreds/keychain) already reject ""
+// downstream, so plain stringArg is fine for those. Anything else that must
+// not silently proceed on "" should go through requireStringArg instead.
 func stringArg(req mcp.CallToolRequest, name string) string {
 	v, _ := req.Params.Arguments[name].(string)
 	return v
+}
+
+// requireStringArg returns the named string argument, or a ready-to-return MCP
+// error result if it is absent or empty (mirroring confinedPathArg/
+// resolveCreds). Use this for a required string arg that has no other
+// downstream validation - e.g. a commit message, or set_credentials'
+// username/token - where an empty value would otherwise silently proceed (an
+// empty-message commit; storing an empty token that clobbers a working one)
+// instead of failing loudly.
+func requireStringArg(req mcp.CallToolRequest, name string) (string, *mcp.CallToolResult) {
+	v := stringArg(req, name)
+	// TrimSpace only for the emptiness check, not the returned value: a
+	// whitespace-only message/username/token (" ", "\n") must not sail through
+	// as "non-empty" - for set_credentials that would silently store a
+	// whitespace credential, clobbering a working one with no error, exactly
+	// the failure mode this helper exists to close. Returning v unmodified (not
+	// the trimmed form) avoids rewriting real content that merely has
+	// incidental leading/trailing whitespace as part of it.
+	if strings.TrimSpace(v) == "" {
+		return "", mcp.NewToolResultError(fmt.Sprintf("%s is required", name))
+	}
+	return v, nil
 }
 
 // boolArg returns the named boolean argument, or false if absent or not a bool.
@@ -188,6 +216,10 @@ func gitCommitPushHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	if errResult != nil {
 		return errResult, nil
 	}
+	message, errResult := requireStringArg(req, "message")
+	if errResult != nil {
+		return errResult, nil
+	}
 
 	host, err := igit.RemoteHost(repoPath)
 	if err != nil {
@@ -200,7 +232,7 @@ func gitCommitPushHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	ctx, cancel := gitOpContext(ctx)
 	defer cancel()
-	result, err := igit.CommitAndPush(ctx, repoPath, stringArg(req, "message"), username, token)
+	result, err := igit.CommitAndPush(ctx, repoPath, message, username, token)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -267,6 +299,10 @@ func gitInitHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	if errResult != nil {
 		return errResult, nil
 	}
+	message, errResult := requireStringArg(req, "message")
+	if errResult != nil {
+		return errResult, nil
+	}
 	username, token, errResult := resolveCreds(host)
 	if errResult != nil {
 		return errResult, nil
@@ -274,7 +310,7 @@ func gitInitHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 
 	ctx, cancel := gitOpContext(ctx)
 	defer cancel()
-	result, err := igit.InitAndPush(ctx, localPath, remoteURL, stringArg(req, "message"), username, token)
+	result, err := igit.InitAndPush(ctx, localPath, remoteURL, message, username, token)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -299,7 +335,15 @@ func getAuthStatusHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 func setCredentialsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	host := stringArg(req, "host")
-	if err := keychain.SetCredentials(host, stringArg(req, "username"), stringArg(req, "token")); err != nil {
+	username, errResult := requireStringArg(req, "username")
+	if errResult != nil {
+		return errResult, nil
+	}
+	token, errResult := requireStringArg(req, "token")
+	if errResult != nil {
+		return errResult, nil
+	}
+	if err := keychain.SetCredentials(host, username, token); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to store credentials: %v", err)), nil
 	}
 	msg := fmt.Sprintf("credentials stored for %s (backend: %s)", host, keychain.Backend())
