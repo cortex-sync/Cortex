@@ -213,17 +213,42 @@ survived. Highest-leverage cluster first.
       the retry finds a clean tree; the delta is lost with certainty. (The destructive pull
       is M2; the skill *recommending this sequence* is the distinct new hole.) **Fix:** change
       the recovery to a non-destructive path, or gate on M2's safe-pull work.
-- [ ] **(high) Codex reconcile folds back to the wrong file.** restore-profile Tier 1 step b
-      reconciles a differing `AGENTS.md`, but the reconcile procedure's step 5 hardcodes
-      writing the merged `CLAUDE.md` to `[local_path]/CLAUDE.md` - for Codex the merged result
-      should land in `adapters/codex.md`. As written it clobbers the repo's `CLAUDE.md` with
-      AGENTS-shaped content or the fold-back never happens. **Fix:** branch the write target by
-      platform; extend `docs/profile-merge-sketch.md` to the AGENTS.md cell.
-- [ ] **(medium) `install-codex.sh` re-run clobbers a newer non-managed `AGENTS.md`.**
-      `backup_existing` (lines 152-157) returns early when `$dest.cortex-bak` exists, then
-      `cp "$src" "$dest"` (line 167) overwrites a user-edited/reconciled AGENTS.md with no fresh
-      backup. `--uninstall` (108-116) similarly restores over a marker-managed-but-user-edited
-      file without saving it. **Fix:** detect content drift before overwrite; save-before-restore.
+- [x] **(done, branch `fix/skills-data-loss-highs`) (high) Codex reconcile folds back to
+      the wrong file.** restore-profile Tier 1 step b reconciles a differing `AGENTS.md`, but
+      the reconcile procedure's step 5 hardcoded writing the merged result to
+      `[local_path]/CLAUDE.md` - for Codex the merged result should land in
+      `adapters/codex.md`. **Fix:** step 5 now branches the fold-back target by which
+      instruction file triggered the reconcile (`CLAUDE.md` for Claude Code/Cowork,
+      `adapters/codex.md` for Codex) instead of always writing `CLAUDE.md`.
+      `docs/profile-merge-sketch.md` extended with an "AGENTS.md cell" section documenting
+      the second write-target row. Doc-only change, no Go/script code.
+- [x] **(done, branch `fix/skills-data-loss-highs`) (medium) `install-codex.sh` re-run
+      clobbers a newer non-managed `AGENTS.md`.** `backup_existing` returned early whenever
+      `$dest.cortex-bak` already existed, before even checking whether `$dest` had drifted
+      since Cortex last wrote it; `--uninstall` used marker-line presence as its only drift
+      signal, which survives a user editing everything else in the file. **Fix:** both paths
+      now compare `$dest` against a new `$dest.cortex-last` snapshot (exactly what Cortex
+      wrote last time, refreshed on every write) instead of relying on "a backup exists" or
+      "the marker survives" as proxies for "unchanged". A re-run that finds real drift saves
+      it to `$dest.cortex-drifted-<timestamp>` before overwriting; `--uninstall` saves it to
+      `$dest.cortex-pre-uninstall` before restoring the original. New regression test
+      `scripts/test-install-codex.sh` (`make test-install-codex`, wired into CI as a new
+      `install-codex` job) covers fresh install, backup-once, no-false-drift-on-unchanged-
+      rerun, the marker-survives-but-content-drifted regression itself, and both uninstall
+      paths - confirmed it fails 3/6 against the pre-fix script and passes 6/6 after.
+      **A fable-agent adversarial review of this fix (recon -> 4 blind finders -> adversarial
+      verifier) then found two real bugs in the fix itself, both closed in the same PR before
+      merge:** (high) `snapshot_before_overwrite` created `.cortex-bak` whenever none existed
+      yet, without checking `.cortex-last` - a fresh install followed immediately by a re-run
+      backed up Cortex's own output as if it were the user's original, which `--uninstall` then
+      "restored", silently failing to uninstall on a completely ordinary lifecycle; fixed by
+      gating the bak-creation branch on `.cortex-last` also being absent. (medium)
+      `.cortex-drifted-<timestamp>`/`.cortex-pre-uninstall` used second-resolution timestamps
+      (the latter not timestamped at all) - two drifting re-runs within the same second silently
+      overwrote each other's saved copy; fixed by suffixing both with `$$`. Two new regression
+      tests added (reinstall-then-uninstall must not poison `.cortex-bak`; two same-second
+      drifted reinstalls must each keep their own file). Remaining low-severity findings from the
+      same review tracked separately below (Skills - flow holes).
 
 ### Skills - flow holes (NEW unless noted)
 
@@ -250,6 +275,22 @@ survived. Highest-leverage cluster first.
       current `[permissions.<name>]` profile form; restore-profile Tier 2 (SKILL.md 87-94) still
       shows only the legacy `[sandbox_workspace_write] network_access = true`. **Fix:** update the
       skill to match the script.
+- [ ] **(new, from a fable-agent adversarial review of `fix/skills-data-loss-highs`) low-severity
+      residue in `install-codex.sh`'s snapshot/drift logic - not fixed in that PR, which only
+      took the high/medium findings.** (a) TOCTOU: `[ -L "$dest" ]` is checked, then `cp "$src"
+      "$dest"` runs later - a concurrent process swapping a symlink into `$dest` in that window
+      makes `cp` follow it and clobber an arbitrary target; needs a same-user concurrent writer,
+      small window. (b) `--uninstall` always restores a symlinked `AGENTS.md` as a plain file
+      (the backup only ever captured the symlink's target content, not the link itself), silently
+      breaking a dotfiles-managed setup, while the printed message still claims "restored
+      original" - pre-existing shape, but the message is actively misleading in this case. (c)
+      test coverage gaps surfaced by the same review: the marker-fallback path (`is_unchanged`
+      when `.cortex-last` predates this fix) and the symlink install branch are both untested;
+      case 4 in `test-install-codex.sh` checks a drift file appeared but not that `$dest` was
+      actually rewritten; `TestRequiredMessageArg` only covers a missing `message`, not an
+      explicit `""` (low risk - same code path as the tested case, but worth closing). **Fix:**
+      temp-file-then-`mv` for the symlink-replacement window (closes (a) too); preserve+restore
+      the symlink itself in the backup/restore pair; add the missing test cases.
 - [ ] *(minor)* `install-codex.sh` (189-193) drops a nonstandard port from the recorded Remote
       (`host="${host%%:*}"` reused to rebuild the URL) though the comment says only userinfo is
       stripped; safety-gate pattern drift (`*.pfx`/`*.p12` present in some replicated gate lists,

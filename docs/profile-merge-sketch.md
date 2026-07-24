@@ -66,6 +66,20 @@ not a git 3-way merge:
 - **Persona / identity blocks** - treat as singletons. If both exist and differ,
   always ask; never silently merge two personas.
 
+## The AGENTS.md cell
+
+The same reconcile branch is reused for Codex: `restore-profile` Tier 1 step b hits an
+existing, differing `$CODEX_HOME/AGENTS.md` and reconciles it the same way as `CLAUDE.md`
+(2-way merge, user-adjudicated, back up first). One thing does **not** generalise from the
+table above: the fold-back target in step 4/5 of the reconcile flow. `CLAUDE.md` folds back
+to `[local_path]/CLAUDE.md`, but the repo has no `AGENTS.md` of its own - the file that
+generates it is `[local_path]/adapters/codex.md`. Folding an AGENTS-shaped merge back to
+`CLAUDE.md` would silently clobber the Claude persona file with Codex-rendered content (or,
+if that step were skipped instead, the merge would just never make it back into the repo).
+`restore-profile`'s reconcile step now branches the write target by which file triggered the
+reconcile - see "Fold it back into the repo" there. Not a new merge strategy, just a second
+write-target row alongside `CLAUDE.md` in that step.
+
 ## Decide before building
 
 1. **Safety** - the local `CLAUDE.md` is *imported content, not instructions*

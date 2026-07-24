@@ -105,17 +105,37 @@ if [ "$uninstall" -eq 1 ]; then
 		fi
 	fi
 	dest="$codex_home/AGENTS.md"
+	# Whether $dest still matches exactly what Cortex last wrote - the authoritative
+	# drift signal. The marker line alone is not sufficient: it survives a user
+	# editing everything else in the file (or a restore-profile reconcile), so a
+	# marker-only check would wrongly call a hand-edited file "unchanged" and let it
+	# be silently discarded below. Fall back to the marker only if $dest.cortex-last
+	# is missing (an install from before this check existed).
+	is_unchanged() {
+		if [ -e "$dest.cortex-last" ]; then
+			cmp -s "$dest" "$dest.cortex-last"
+		else
+			grep -qxF "$cortex_marker" "$dest" 2>/dev/null
+		fi
+	}
 	if [ -e "$dest.cortex-bak" ]; then
-		# A genuine original exists. If the user has since replaced the managed file
-		# with their own content, preserve that before restoring the backup.
-		if [ -e "$dest" ] && ! grep -qxF "$cortex_marker" "$dest" 2>/dev/null; then
-			cp "$dest" "$dest.cortex-pre-uninstall"
-			echo "install-codex: current AGENTS.md is not Cortex-managed; saved it to $dest.cortex-pre-uninstall before restoring" >&2
+		# A genuine original exists. If the current file has drifted from what Cortex
+		# last wrote (a user edit, or an external reconcile), preserve that content
+		# before restoring the pre-Cortex backup over it.
+		if [ -e "$dest" ] && ! is_unchanged; then
+			# Timestamped + PID-suffixed like the reinstall drift file: a fixed name
+			# here would let a second drift-then-uninstall cycle silently overwrite
+			# and destroy the first cycle's saved copy - the exact loss this file
+			# exists to prevent.
+			pre_uninstall="$dest.cortex-pre-uninstall-$(date +%Y%m%d%H%M%S)-$$"
+			cp "$dest" "$pre_uninstall"
+			echo "install-codex: current AGENTS.md changed since Cortex last wrote it; saved it to $pre_uninstall before restoring" >&2
 		fi
 		mv "$dest.cortex-bak" "$dest"
+		rm -f "$dest.cortex-last"
 		echo "install-codex: restored original AGENTS.md from backup"
-	elif [ -e "$dest" ] && grep -qxF "$cortex_marker" "$dest" 2>/dev/null; then
-		rm -f "$dest"
+	elif [ -e "$dest" ] && is_unchanged; then
+		rm -f "$dest" "$dest.cortex-last"
 		echo "install-codex: removed Cortex-managed AGENTS.md (no prior user file to restore)"
 	elif [ -e "$dest" ]; then
 		echo "install-codex: left $dest in place (not Cortex-managed) - remove it by hand if unwanted" >&2
@@ -145,24 +165,48 @@ if [ -n "$profile_dir" ]; then
 		echo "install-codex: $dest is a directory - refusing to overwrite" >&2
 		exit 1
 	fi
-	# Back up a genuine user-authored AGENTS.md exactly once: skip if a backup
-	# already exists, or if the file is already Cortex-managed (matched on our exact
-	# whole-line marker, so prose merely mentioning the marker can't misclassify a
-	# real user file), so a re-run with a changed adapter can't clobber the backup.
-	backup_existing() {
-		[ -e "$dest.cortex-bak" ] && return 0
-		grep -qxF "$cortex_marker" "$1" 2>/dev/null && return 0
-		cp "$1" "$dest.cortex-bak"
-		echo "install-codex: backed up existing AGENTS.md to $dest.cortex-bak"
+	# Snapshot whatever is at $dest before it gets overwritten, in two layers:
+	#  - $dest.cortex-bak: the genuine pre-Cortex original, saved exactly once and
+	#    never touched again (this is what --uninstall restores).
+	#  - $dest.cortex-drifted-<timestamp>: on a re-run, if $dest no longer matches
+	#    what Cortex itself wrote last time ($dest.cortex-last), something else
+	#    changed it since - a user edit, or a restore-profile reconcile - and that
+	#    content is about to be discarded by the cp below, so save it first. This
+	#    replaces a marker-presence check: the marker line alone survives edits to
+	#    everything else in the file, so it cannot detect this drift.
+	snapshot_before_overwrite() {
+		# $dest can only be a genuine pre-Cortex original if Cortex has NEVER
+		# written to this path before - checking .cortex-bak alone is not enough:
+		# a fresh install (no pre-existing file, so no bak was needed) followed by
+		# an immediate re-run would otherwise see "no bak yet" and back up its own
+		# prior output as if it were the user's original, which --uninstall would
+		# later restore - silently defeating uninstall on an entirely ordinary
+		# install-then-reinstall-then-uninstall sequence. .cortex-last existing at
+		# all (regardless of whether it still matches $1) proves Cortex has been
+		# here before, so it - not just .cortex-bak - gates the "genuine original"
+		# branch.
+		if [ ! -e "$dest.cortex-bak" ] && [ ! -e "$dest.cortex-last" ]; then
+			cp "$1" "$dest.cortex-bak"
+			echo "install-codex: backed up existing AGENTS.md to $dest.cortex-bak"
+			return 0
+		fi
+		if [ ! -e "$dest.cortex-last" ] || ! cmp -s "$1" "$dest.cortex-last"; then
+			# $$ (this invocation's PID) keeps two drifting re-runs within the same
+			# second from silently overwriting each other's saved copy - date alone
+			# is only second-resolution.
+			drift="$dest.cortex-drifted-$(date +%Y%m%d%H%M%S)-$$"
+			cp "$1" "$drift"
+			echo "install-codex: $dest changed since Cortex last wrote it - saved the current content to $drift before overwriting" >&2
+		fi
 	}
 	if [ -L "$dest" ]; then
 		# Replace the symlink itself - never write through it and clobber an
-		# unrelated target outside $codex_home. Back up the target's content first.
+		# unrelated target outside $codex_home. Snapshot the target's content first.
 		echo "install-codex: $dest is a symlink - replacing the link, not its target" >&2
-		[ -e "$dest" ] && backup_existing "$dest"
+		[ -e "$dest" ] && snapshot_before_overwrite "$dest"
 		rm -f "$dest"
 	elif [ -e "$dest" ]; then
-		backup_existing "$dest"
+		snapshot_before_overwrite "$dest"
 	fi
 	cp "$src" "$dest"
 	# Append the Cortex configuration block so sync-profile and the AGENTS.md memory
@@ -200,6 +244,10 @@ if [ -n "$profile_dir" ]; then
 			fi
 		} >>"$dest"
 	fi
+	# Snapshot exactly what Cortex just wrote, so a future re-run's drift check
+	# (snapshot_before_overwrite / --uninstall's is_unchanged) has something real to
+	# compare $dest against instead of relying on the marker line surviving intact.
+	cp "$dest" "$dest.cortex-last"
 	echo "install-codex: placed $(basename "$src") -> $dest (+ Cortex configuration block)"
 fi
 

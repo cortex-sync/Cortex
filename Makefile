@@ -1,4 +1,4 @@
-.PHONY: fmt lint validate build build-all clean hooks-install release-dry-run licenses e2e mcpb mcpb-all mcpb-check test-launcher icon
+.PHONY: fmt lint validate build build-all clean hooks-install release-dry-run licenses e2e mcpb mcpb-all mcpb-check test-launcher test-install-codex icon
 
 # Pin the tool that drives every dev's pre-commit hooks, rather than tracking a
 # moving @latest (consistent with the pinned golangci-lint/gosec/govulncheck).
@@ -58,6 +58,12 @@ icon:
 # fixture release - no network. See scripts/test-launcher.sh.
 test-launcher:
 	bash scripts/test-launcher.sh
+
+# Test install-codex.sh's AGENTS.md snapshot/drift handling (backup-once,
+# drift-on-reinstall, drift-on-uninstall) - no Codex binary or network needed.
+# See scripts/test-install-codex.sh.
+test-install-codex:
+	bash scripts/test-install-codex.sh
 
 hooks-install:
 	@which lefthook > /dev/null || (echo "Installing lefthook $(LEFTHOOK_VERSION)..." && go install github.com/evilmartians/lefthook@$(LEFTHOOK_VERSION))
