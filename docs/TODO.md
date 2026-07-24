@@ -141,19 +141,32 @@ survived. Highest-leverage cluster first.
       with incidental leading/trailing whitespace isn't silently rewritten). Regression tests
       extended with whitespace-only variants for message/username/token, each confirmed to
       fail against the pre-fix `v == ""` check and pass after.
-- [ ] **(low) `keyringStore.Set` is a non-atomic two-entry write.** `keyring_store.go:17-25`
-      - if the username write succeeds and the token write fails, a later `Get` returns a
-      backend error (not `ErrNotFound`), so `get_auth_status` reports a scary failure and
-      sync is blocked until a manual `delete_credentials`. **Fix:** best-effort delete the
-      username on token-write failure, or store both as one JSON value under a single key.
-- [ ] **(low) `Status` output is nondeterministically ordered** (map iteration,
-      `git.go:43-45`) - noisy for diffing tool output across calls. **Fix:** sort paths.
-- [ ] *(cleanup)* `internal/hostapi/` is an **empty directory** (no files) - dead artefact;
-      remove it or document what it holds a place for.
-- [ ] *(fold into L4/store-key host-normalisation)* `CORTEX_GIT_HOST` with a port can never
-      match - lookup hosts come from `url.Hostname()` (port stripped), so
-      `CORTEX_GIT_HOST=git.example.com:8443` is silently dead. Strip the port in the canon
-      or document "hostname without port".
+- [x] **(done, branch `fix/tool-surface-hardening-lows`) (low) `keyringStore.Set` was a
+      non-atomic two-entry write.** If the username write succeeded and the token write then
+      failed, a later `Get` returned a backend error (not `ErrNotFound`), so `get_auth_status`
+      reported a scary failure and sync was blocked until a manual `delete_credentials`.
+      **Fix:** best-effort delete the username entry on token-write failure (the store's own
+      error is what the caller needs to see, so the cleanup's error is ignored). Regression
+      test uses an indirected `keyringSet` function var so a stub can fail only the second
+      (token) call - something go-keyring's own mock (all-or-nothing) can't produce - and
+      checks the username *key* directly rather than via `Get` (which would report
+      `ErrNotFound` regardless, just because the token entry is missing, without proving the
+      username entry was actually cleaned up).
+- [x] **(done, branch `fix/tool-surface-hardening-lows`) (low) `Status` output was
+      nondeterministically ordered** (map iteration). **Fix:** sort paths before formatting.
+      Regression test runs `Status` 5 times over the same 4 untracked files and asserts
+      alphabetical order every time; confirmed it fails most runs (map iteration order is
+      randomised per range, not just per map) against the pre-fix code.
+- [x] **(verified, nothing to do)** `internal/hostapi/` doesn't exist in this checkout and
+      never appears anywhere in `git log --all` - git doesn't track empty directories, so
+      whatever prompted this finding was never actually a committed artefact. Removed the
+      stale line.
+- [x] **(verified, already fixed)** `CORTEX_GIT_HOST` with a port matching was fixed as a
+      side effect of the L4 host-normalisation work (`internal/hostcanon.Canonicalize`,
+      shared by `envcreds.go`'s `hostsEqual`) - already strips a port via `net.SplitHostPort`
+      on both sides of the comparison, and already has a dedicated regression test
+      (`TestEnvCredentialsHostMatchIgnoresPort`, `envcreds_test.go`) covering both directions.
+      Confirmed the test passes; this checkbox was just never ticked when L4 landed.
 
 ### Test-coverage gaps (floor 75%, actual ~79.8% - this is where the missing ~20% is)
 
