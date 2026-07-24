@@ -168,15 +168,36 @@ survived. Highest-leverage cluster first.
       (`TestEnvCredentialsHostMatchIgnoresPort`, `envcreds_test.go`) covering both directions.
       Confirmed the test passes; this checkbox was just never ticked when L4 landed.
 
-### Test-coverage gaps (floor 75%, actual ~79.8% - this is where the missing ~20% is)
+### Test-coverage gaps (floor 75%, was ~79.8%, now ~86.4% after the items below)
 
-- [ ] `git_commit_push` happy path has **no in-process test** (acknowledged
-      `handlers_test.go:105-107`; only the tag-gated e2e covers it - CI must actually run e2e
-      for it to count). Also untested: `resolveCreds` "could not read credentials" arm
-      (`main.go:159-160`) and `getAuthStatusHandler` error arm (`main.go:270`) - both
-      drivable via `keyring.MockInitWithError`; `Pull` detached-HEAD guard
-      (`git.go:150-152`); `envcreds` warn-once emission; `fileStorePath()` fallback chain;
-      `keyringStore` partial-failure paths. No regression test yet for any NEW finding above.
+- [x] **(done, branch `fix/test-coverage-gaps`)** Closed each named gap, checking what was
+      actually reachable before writing a test rather than assuming the bullet's framing:
+      - **`resolveCreds`'s "could not read credentials" arm** and **`getAuthStatusHandler`'s
+        equivalent backend-error branch** - both now covered via `keyring.MockInitWithError`,
+        as the finding suggested.
+      - **`git_commit_push`'s operation-error path** - the finding's literal "happy path" can't
+        be unit-tested without real network (a clean repo always attempts a push to flush
+        pending commits, same reason `commit_push` was excluded from
+        `TestGitNetworkHandlersOperationError`); that stays e2e-only (already tracked
+        separately: "e2e never runs between releases", Release pipeline section). What *is*
+        now covered: the handler's post-credential-gate error path, via a **dirty** repo whose
+        file trips the secret-scan gate - deterministic, no network, and exercises the same
+        `gitOpContext`/`igit.CommitAndPush`/error-mapping code the happy path would.
+      - **`Pull`'s detached-HEAD guard** - covered, plus a bonus non-repo case that was also
+        untested.
+      - **`envcreds` warn-once emission** - already fully covered by an existing test
+        (`TestEnvCredentialsTokenWithoutHostIgnored`); verified, not re-tested.
+      - **`fileStorePath()`'s fallback chain** - covered directly (both the primary
+        `$HOME/.config`-derived path and the double-fallback when `os.UserConfigDir()` *and*
+        `os.UserHomeDir()` both fail, landing on the documented `"."` dot-dir).
+      - **`keyringStore` partial-failure paths** - `Set`'s first-call (username) failure
+        branch (distinct from the token-write branch a prior PR already covered); `Get`'s two
+        backend-error branches plus the asymmetric "username present, token missing" state;
+        `Delete`'s two backend-error branches. Needed two new indirection vars (`keyringGet`,
+        `keyringDelete`, alongside the existing `keyringSet`) since go-keyring's own mock can
+        only fail every call or none - `keyringStore` itself is now 100% covered.
+      - Total coverage: `cmd/server` 84.9% → 88.3%, `internal/git` 82.7% → 83.7%,
+        `internal/keychain` 80.4% → 86.9%, module total ~83.3% → ~86.4%.
 
 ### Release pipeline (NEW - highest-leverage before v0.3)
 

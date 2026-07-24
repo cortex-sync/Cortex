@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,6 +86,22 @@ func TestResolveCredsMissingVsFound(t *testing.T) {
 	}
 }
 
+// TestResolveCredsBackendError checks the branch where the credential store
+// itself fails (not just "nothing stored") - a locked keyring or decryption
+// error must be surfaced verbatim, not misreported as "no credentials found".
+func TestResolveCredsBackendError(t *testing.T) {
+	keyring.MockInitWithError(errors.New("simulated keychain backend failure"))
+	t.Cleanup(func() { keyring.MockInit() })
+
+	_, _, errRes := resolveCreds("backend-error.example")
+	if errRes == nil {
+		t.Fatal("resolveCreds with a failing backend: want an error result, got nil")
+	}
+	if txt := resultText(t, errRes); !strings.Contains(txt, "could not read credentials") {
+		t.Fatalf("backend-error message = %q, want it to mention 'could not read credentials'", txt)
+	}
+}
+
 // TestGetAuthStatusHandler checks both branches of the status handler.
 func TestGetAuthStatusHandler(t *testing.T) {
 	res := call(t, getAuthStatusHandler, map[string]interface{}{"host": "noauth.example"})
@@ -102,6 +119,21 @@ func TestGetAuthStatusHandler(t *testing.T) {
 	txt := resultText(t, res)
 	if !strings.Contains(txt, "credentials found") || !strings.Contains(txt, "bob") {
 		t.Fatalf("set-host status = %q, want 'credentials found' and user 'bob'", txt)
+	}
+}
+
+// TestGetAuthStatusHandlerBackendError checks the branch where the credential
+// store fails outright, distinct from "nothing stored for this host".
+func TestGetAuthStatusHandlerBackendError(t *testing.T) {
+	keyring.MockInitWithError(errors.New("simulated keychain backend failure"))
+	t.Cleanup(func() { keyring.MockInit() })
+
+	res := call(t, getAuthStatusHandler, map[string]interface{}{"host": "backend-error.example"})
+	if !res.IsError {
+		t.Fatalf("get_auth_status with a failing backend: want IsError, got %q", resultText(t, res))
+	}
+	if txt := resultText(t, res); !strings.Contains(txt, "could not read credentials") {
+		t.Fatalf("backend-error message = %q, want it to mention 'could not read credentials'", txt)
 	}
 }
 

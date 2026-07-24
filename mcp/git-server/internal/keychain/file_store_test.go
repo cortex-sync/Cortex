@@ -200,3 +200,33 @@ func TestFileStoreWarnsOnceWhenUnbound(t *testing.T) {
 		t.Fatalf("warning emitted %d times across two derivations, want exactly 1", n)
 	}
 }
+
+// TestFileStorePathUsesConfigDir checks the primary path: os.UserConfigDir()
+// succeeds (as it does in any normal environment with $HOME set), so
+// fileStorePath must use it rather than falling back.
+func TestFileStorePathUsesConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	want := filepath.Join(home, ".config", "cortex", "credentials.enc")
+	if got := fileStorePath(); got != want {
+		t.Fatalf("fileStorePath() = %q, want %q", got, want)
+	}
+}
+
+// TestFileStorePathFallsBackWhenHomeUnavailable covers the fallback chain:
+// with both $XDG_CONFIG_HOME and $HOME empty, os.UserConfigDir() fails (it has
+// nothing to derive a path from), and the fallback to os.UserHomeDir() fails
+// for the same reason, landing on the documented last resort ("."). Both env
+// vars must be cleared together - os.UserConfigDir() on unix falls back to
+// $HOME/.config internally, so it only fails when $HOME is unavailable too.
+func TestFileStorePathFallsBackWhenHomeUnavailable(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+
+	want := filepath.Join(".", ".config", "cortex", "credentials.enc")
+	if got := fileStorePath(); got != want {
+		t.Fatalf("fileStorePath() = %q, want %q (the documented dot-dir fallback)", got, want)
+	}
+}
