@@ -5,7 +5,7 @@
 # Throwaway, localhost/CI only - never reuse this image or cert.
 # Pinned by digest: the e2e job gates releases, so a re-pushed mutable tag must
 # not be able to change release-blocking behaviour. Resolved from gitea/gitea:1.26.
-FROM gitea/gitea:1.27@sha256:7dff60d7ea6df9d0bdf78971cdb1350e9b7df3fda5f115c77afe12122887bd64
+FROM gitea/gitea:28.2@sha256:30777c91280d973fa02be48b1ade735bd6859e8f6f7af3b4444d519437852504
 COPY certs/ /certs/
 # /certs must be traversable (0755) and the files readable by the unprivileged
 # gitea user; COPY alone can leave the dir without its execute bit.
